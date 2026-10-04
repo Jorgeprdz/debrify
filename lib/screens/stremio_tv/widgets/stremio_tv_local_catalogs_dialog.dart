@@ -432,8 +432,20 @@ class LocalCatalogImporter {
     final name = (parsed['name'] as String).trim();
 
     final existing = await StorageService.getStremioTvLocalCatalogs();
-    if (existing.any((c) => c['name'] == name)) {
-      return 'Catalog "$name" already exists';
+    final existingIndex = existing.indexWhere((c) => c['name'] == name);
+    if (existingIndex >= 0) {
+      if (sourceUrl == null || sourceUrl.trim().isEmpty) {
+        return 'Catalog "$name" already exists';
+      }
+      final updated = Map<String, dynamic>.from(existing[existingIndex])
+        ..['name'] = name
+        ..['type'] = parsed['type'] as String? ?? 'movie'
+        ..['items'] = parsed['items']
+        ..['sourceUrl'] = sourceUrl.trim()
+        ..['refreshedAt'] = DateTime.now().toIso8601String();
+      updated.addAll(_portableImportMetadata(parsed));
+      final ok = await StorageService.updateStremioTvLocalCatalog(updated);
+      return ok ? null : 'Catalog could not be updated';
     }
 
     final catalog = <String, dynamic>{
@@ -1518,6 +1530,8 @@ class _StremioTvLocalCatalogsDialogState
                               ? ' · Trakt'
                               : isMdblist
                               ? ' · MDBList'
+                              : isRemote
+                              ? ' · URL'
                               : ''}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
