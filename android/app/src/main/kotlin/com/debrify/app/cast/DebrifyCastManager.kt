@@ -43,6 +43,8 @@ class DebrifyCastManager(
     private var lastErrorCode: String? = null
     private var endedSequence: Int = 0
     private var endedForCurrentLoad = false
+    private var observedMediaSessionId: String? = null
+    private var observedMediaContentId: String? = null
 
     private val castStateListener = CastStateListener {
         if (!disposed) emitSnapshot()
@@ -69,9 +71,10 @@ class DebrifyCastManager(
         }
     }
 
-    private val progressListener = RemoteMediaClient.ProgressListener { progressMs, durationMs ->
-        lastPositionMs = progressMs.takeIf { it >= 0 }
-        lastDurationMs = durationMs.takeIf { it > 0 }
+    private val progressListener = RemoteMediaClient.ProgressListener { _, _ ->
+        // Read times from the SAME identified media, not a late progress
+        // callback that could belong to the previous channel.
+        captureRemotePosition()
         updatePlaybackState()
         emitSnapshot()
     }
@@ -442,6 +445,8 @@ class DebrifyCastManager(
 
     private fun bindSession(session: CastSession) {
         unbindRemoteClient()
+        observedMediaSessionId = null
+        observedMediaContentId = null
         deviceName = session.castDevice?.friendlyName
         val client = session.remoteMediaClient
         remoteMediaClient = client
@@ -471,13 +476,26 @@ class DebrifyCastManager(
     private fun captureRemotePosition() {
         val client = remoteMediaClient ?: return
         try {
+            val currentSessionId = client.mediaStatus?.mediaSessionId?.toString()
+            val currentContentId = client.mediaInfo?.contentId
+            if (currentSessionId != observedMediaSessionId ||
+                currentContentId != observedMediaContentId
+            ) {
+                observedMediaSessionId = currentSessionId
+                observedMediaContentId = currentContentId
+                // Never let a new media identity inherit a previous duration.
+                lastPositionMs = null
+                lastDurationMs = null
+            }
             val position = client.approximateStreamPosition
-            if (position >= 0) lastPositionMs = position
+            lastPositionMs = position.takeIf { it >= 0 }
             val duration = client.mediaInfo?.streamDuration ?: MediaInfo.UNKNOWN_DURATION
-            if (duration >= 0) lastDurationMs = duration
+            lastDurationMs = duration.takeIf { it > 0 }
             if (client.isPlaying) resumeShouldPlay = true
             if (client.isPaused) resumeShouldPlay = false
         } catch (_: Exception) {
+            // Unknown times remain invalid for a deferred startAtPercent seek.
+            lastDurationMs = null
         }
     }
 

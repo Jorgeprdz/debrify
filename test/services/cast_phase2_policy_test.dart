@@ -41,6 +41,11 @@ void main() {
           duration: const Duration(seconds: 100)), isNull);
       expect(gate.claim(contentId: nextUrl, mediaSessionId: 20,
           duration: const Duration(seconds: 100)), isNull);
+      // New receiver identity with unknown duration must wait for metadata.
+      expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
+          duration: null), isNull);
+      expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
+          duration: Duration.zero), isNull);
       expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
           duration: const Duration(seconds: 100)), const Duration(seconds: 50));
       expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
