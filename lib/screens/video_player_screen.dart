@@ -6614,6 +6614,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       await _goToNextEpisodeOnCast(autoAdvance: false);
       return;
     }
+    // Handoff windows must never enter the local next/open path.
+    if (!_playbackOwnership.isLocal) return;
 
     // Show black screen during transition to hide previous frame
     _clearBufferingIndicator();
@@ -9762,6 +9764,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     final pendingPlaylist = _pendingSourcePlaylist;
     _pendingSourcePlaylist = null;
+    if (!_playbackOwnership.isLocal && !_castRemoteActive) return;
     if (_castRemoteActive) {
       await _switchCastSource(
         index,
@@ -9914,6 +9917,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   /// deliberately, so a dead pick just leaves the channel down (they can
   /// pick another from the sheet).
   Future<void> _switchToIptvSource(int index, String url) async {
+    if (!_playbackOwnership.isLocal) return;
     _hideSourceSheet();
     final key = _iptvChannelKey;
     final ticket = ++_iptvSwitchTicket;
@@ -10582,6 +10586,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     if (_castSourceSwitchInProgress) return false;
     _castSourceSwitchInProgress = true;
+    final previousWasEnded = _lastCastPlaybackState == CastPlaybackState.ended;
     final percentTicket = _castStartPercentGate.prepare(
       contentId: request.url,
       previousMediaSessionId: _castService.snapshot.mediaSessionId,
@@ -10602,7 +10607,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       }
       _castStartPercentGate.confirm(percentTicket);
       _maybeApplyCastPendingStart(_castService.snapshot);
-      _stopCastTrackingForNavigation();
+      if (!previousWasEnded) _stopCastTrackingForNavigation();
 
       setState(() {
         _currentStremioTvChannelId = channelId;
@@ -10908,6 +10913,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     if (_castSourceSwitchInProgress) return false;
     _castSourceSwitchInProgress = true;
+    final previousWasEnded = _lastCastPlaybackState == CastPlaybackState.ended;
     final desiredStart = widget.startFromRandom
         ? _random.nextDouble() *
             widget.randomStartMaxPercent.clamp(0, 100) / 100
@@ -10930,7 +10936,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       }
       _castStartPercentGate.confirm(percentTicket);
       _maybeApplyCastPendingStart(_castService.snapshot);
-      _stopCastTrackingForNavigation();
+      if (!previousWasEnded) _stopCastTrackingForNavigation();
 
       final channelName = payload['channelName']?.toString();
       final channelId = payload['channelId']?.toString();
@@ -12865,6 +12871,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     // receiver session. PopScope marks real route exits and disconnects there.
     _pendingCastRequest = null;
     _castRemoteActive = false;
+    _castStartPercentGate.cancel();
     _stremioTvStartupWatch?.dispose();
     _stremioTvStartupSeek.cancel();
     _observeServerWatch();
