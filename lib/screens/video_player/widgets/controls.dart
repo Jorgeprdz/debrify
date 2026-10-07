@@ -62,6 +62,11 @@ class Controls extends StatelessWidget {
   final VoidCallback? onShowStremioSources;
   final bool showPipButton;
   final VoidCallback? onPip;
+  final bool showCastButton;
+  final bool castConnected;
+  final bool castConnecting;
+  final bool castError;
+  final VoidCallback? onCast;
 
   /// Record control for live IPTV (libmpv `stream-record`). Shown only when a
   /// live channel is playing on a native (libmpv) backend.
@@ -161,6 +166,11 @@ class Controls extends StatelessWidget {
     this.onShowStremioSources,
     this.showPipButton = false,
     this.onPip,
+    this.showCastButton = false,
+    this.castConnected = false,
+    this.castConnecting = false,
+    this.castError = false,
+    this.onCast,
     this.hasRecord = false,
     this.isRecording = false,
     this.onRecord,
@@ -275,6 +285,11 @@ class Controls extends StatelessWidget {
       onToggleStartOverTimeline: onToggleStartOverTimeline,
       startOverTimelineVisible: startOverTimelineVisible,
       onPip: onPip,
+      showCastButton: showCastButton,
+      castConnected: castConnected,
+      castConnecting: castConnecting,
+      castError: castError,
+      onCast: onCast,
       hasNext: hasNext,
       hasPrevious: hasPrevious,
       hasNextChannel: hasNextChannel,
@@ -445,8 +460,49 @@ class Controls extends StatelessWidget {
                       ],
                     ),
                   ),
-                  // Picture-in-picture (Android phone); otherwise empty space
-                  // to balance the back button when it's visible.
+                  if (showCastButton && onCast != null)
+                    IconButton(
+                      icon: castConnecting
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                Icon(
+                                  castConnected
+                                      ? Icons.cast_connected
+                                      : Icons.cast,
+                                  color: Colors.white,
+                                ),
+                                if (castError)
+                                  const Positioned(
+                                    right: -5,
+                                    top: -5,
+                                    child: Icon(
+                                      Icons.error,
+                                      size: 12,
+                                      color: Colors.redAccent,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                      tooltip: castConnecting
+                          ? 'Connecting to Cast'
+                          : castError
+                          ? 'Cast error'
+                          : castConnected
+                          ? 'Casting'
+                          : 'Cast',
+                      onPressed: onCast,
+                    ),
+                  // Picture-in-picture remains independent of Cast. The host
+                  // hides it while a remote session owns playback.
                   if (showPipButton && onPip != null)
                     IconButton(
                       icon: const Icon(
@@ -456,7 +512,7 @@ class Controls extends StatelessWidget {
                       tooltip: 'Picture in picture',
                       onPressed: onPip,
                     )
-                  else if (!hideBackButton)
+                  else if (!hideBackButton && !showCastButton)
                     const SizedBox(width: 48),
                 ],
               ),

@@ -42,6 +42,7 @@ class MainActivity : FlutterActivity() {
 	private val REQUEST_PICK_DOWNLOAD_DIR = 51423
 	private var pendingDirPickResult: MethodChannel.Result? = null
     private var localSourceAccess: com.debrify.app.storage.LocalSourceAccess? = null
+    private var debrifyCastManager: com.debrify.app.cast.DebrifyCastManager? = null
     // Process-local and enabled only by the journaled, user-confirmed recovery
     // reset. This lets that reset drain every owner's native work even when the
     // last projected profile was a child and the encrypted registry cannot be
@@ -1059,10 +1060,13 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         recordActivityLifecycle("resume")
         ActivityTracker.currentActivity = this
+        debrifyCastManager?.onHostResumed()
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         recordActivityLifecycle("engine_cleanup")
+        debrifyCastManager?.dispose()
+        debrifyCastManager = null
         super.cleanUpFlutterEngine(flutterEngine)
         // The trailer player's ExoPlayer listeners keep emitting onto this
         // engine's messenger after detach; invokeMethod on a detached engine
@@ -1094,6 +1098,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         localSourceAccess?.dispose()
         localSourceAccess = null
+        debrifyCastManager?.dispose()
+        debrifyCastManager = null
         recordActivityLifecycle("destroy")
         tvTrailerPlayer?.releaseAll()
         tvTrailerPlayer = null
@@ -1128,6 +1134,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onPause() {
         recordActivityLifecycle("pause")
+        debrifyCastManager?.onHostPaused()
         // Set this BEFORE super.onPause: the task/recents snapshot belongs to
         // this transition, while Flutter's lock-on-resume callback happens far
         // too late (after the app becomes active again).
@@ -1306,6 +1313,15 @@ class MainActivity : FlutterActivity() {
         localSourceAccess?.dispose()
         localSourceAccess = com.debrify.app.storage.LocalSourceAccess(this, flutterEngine.dartExecutor.binaryMessenger)
 		com.debrify.app.security.DeviceSecretCipherPlugin.register(this, flutterEngine)
+        debrifyCastManager?.dispose()
+        debrifyCastManager = if (isTelevision()) {
+            null
+        } else {
+            com.debrify.app.cast.DebrifyCastManager(
+                this,
+                flutterEngine.dartExecutor.binaryMessenger,
+            )
+        }
 		MethodChannel(
 			flutterEngine.dartExecutor.binaryMessenger,
 			"com.debrify.app/profile_privacy",

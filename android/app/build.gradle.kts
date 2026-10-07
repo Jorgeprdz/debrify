@@ -143,6 +143,11 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+
+    // Google Cast sender only. Keep Media3 pinned independently: Cast is an
+    // additive playback destination and must not migrate the Android TV player.
+    implementation("com.google.android.gms:play-services-cast-framework:22.3.0")
+
     implementation("androidx.media3:media3-exoplayer:1.8.0")
     implementation("androidx.media3:media3-datasource-okhttp:1.8.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

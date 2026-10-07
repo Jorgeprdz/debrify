@@ -34,6 +34,7 @@ import '../services/skip_segment_service.dart';
 import '../services/analytics_service.dart';
 import '../services/pip_service.dart';
 import '../services/audio_effect_session_service.dart';
+import '../services/cast_service.dart';
 import '../services/tvos_decode_remedy.dart';
 import '../services/tvos_display_match_service.dart';
 import '../services/android_native_downloader.dart';
@@ -307,6 +308,7 @@ class VideoPlayerScreen extends StatefulWidget {
   final int? contentSeason;
   final int? contentEpisode;
   final String? contentTitle; // Clean display name (IMDB title)
+  final String? posterUrl; // Optional artwork for Cast/remote presentation
   final PlaybackResumePolicy resumePolicy;
   // IPTV channel list for in-player channel switching
   final List<IptvChannel>? iptvChannels;
@@ -390,6 +392,7 @@ class VideoPlayerScreen extends StatefulWidget {
     this.contentSeason,
     this.contentEpisode,
     this.contentTitle,
+    this.posterUrl,
     this.resumePolicy = PlaybackResumePolicy.sourceSpecific,
     this.iptvChannels,
     this.iptvStartIndex,
@@ -498,6 +501,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   final ValueNotifier<bool> _controlsVisible = ValueNotifier<bool>(true);
   String?
   _currentStreamUrl; // Last resolved stream URL for the active playlist entry
+
+  final CastService _castService = CastService.instance;
+  CastMediaRequest? _pendingCastRequest;
+  bool _castRemoteActive = false;
+  bool _castLoadInFlight = false;
+  bool _castRestoreInFlight = false;
+  bool _castHandoffWasPlaying = false;
 
   // Cached IMDB ID for single-file movie playback (when no playlist exists)
   String? _singleFileImdbId;
@@ -1619,6 +1629,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     super.initState();
     _continuousShuffleEnabled = widget.initialContinuousShuffle;
     _activeHttpHeaders = widget.httpHeaders;
+    if (Platform.isAndroid && !PlatformUtil.isAndroidTvCached) {
+      _castService.addListener(_onCastServiceChanged);
+      unawaited(_castService.initialize());
+    }
     PlayerVisibility.opened(this);
     AnalyticsService.screenView('video_player');
     _startAnalyticsHeartbeat();
@@ -11842,6 +11856,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   @override
   void dispose() {
+    _castService.removeListener(_onCastServiceChanged);
+    if (_castRemoteActive) {
+      unawaited(
+        _castService.disconnect().then<void>((_) {}).catchError((Object _) {}),
+      );
+    }
+    _pendingCastRequest = null;
+    _castRemoteActive = false;
     _stremioTvStartupWatch?.dispose();
     _stremioTvStartupSeek.cancel();
     _observeServerWatch();
@@ -13649,7 +13671,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     if (_panIgnore) return;
     if (_mode == GestureMode.seek && _seekHud.value != null) {
       final target = _seekHud.value!.target;
-      _player.seek(target);
+      _seekUserPlayback(target);
       _traktScrobbleSeek(target);
       _simklScrobbleSeek(target);
       _mdblistScrobbleSeek(target);
@@ -13665,7 +13687,295 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   String _format(Duration d) => formatDuration(d);
 
+  bool get _castUiConnected =>
+      _castRemoteActive ||
+      _castService.connected ||
+      _castService.state == CastPlaybackState.playing ||
+      _castService.state == CastPlaybackState.paused;
+
+  bool get _castUiConnecting =>
+      _castLoadInFlight ||
+      _castService.state == CastPlaybackState.connecting;
+
+  String? get _castCurrentUrl {
+    final current = _currentStreamUrl?.trim();
+    if (current != null && current.isNotEmpty) return current;
+    final initial = widget.videoUrl.trim();
+    return initial.isEmpty ? null : initial;
+  }
+
+  bool get _canCastCurrentMedia {
+    if (!Platform.isAndroid || PlatformUtil.isTelevision) return false;
+    if (!_castService.available && !_castService.connected) return false;
+    if (widget.audioUrl?.trim().isNotEmpty == true) return false;
+    final url = _castCurrentUrl;
+    if (url == null || !CastMediaRequest.isDirectHttpMediaUrl(url)) {
+      return false;
+    }
+    final headers = _activeHttpHeaders;
+    return headers == null || headers.isEmpty;
+  }
+
+  CastMediaRequest? _buildCastMediaRequest() {
+    final url = _castCurrentUrl;
+    if (url == null || !CastMediaRequest.isDirectHttpMediaUrl(url)) {
+      return null;
+    }
+    if (widget.audioUrl?.trim().isNotEmpty == true) return null;
+
+    String? fallbackName;
+    if (_activePlaylist != null &&
+        _currentIndex >= 0 &&
+        _currentIndex < _activePlaylist!.length) {
+      fallbackName = _activePlaylist![_currentIndex].title;
+    }
+
+    final isSeries = _effectiveContentType == 'series';
+    final season = isSeries ? _effectiveContentSeason : null;
+    final episode = isSeries ? _effectiveContentEpisode : null;
+    final episodeLabel = isSeries && (season != null || episode != null)
+        ? [
+            if (season != null) 'S$season',
+            if (episode != null) 'E$episode',
+          ].join(' ')
+        : widget.subtitle;
+
+    return CastMediaRequest(
+      url: url,
+      mimeType: CastMediaRequest.inferMimeType(
+        url,
+        fallbackName: fallbackName,
+      ),
+      title: _currentPlaybackTitleForIdentity(),
+      subtitle: episodeLabel,
+      seriesTitle: isSeries
+          ? (_effectiveContentTitle ?? widget.contentTitle ?? widget.title)
+          : null,
+      season: season,
+      episode: episode,
+      posterUrl: widget.posterUrl,
+      position: _position >= Duration.zero ? _position : null,
+      duration: _duration > Duration.zero ? _duration : null,
+      headers: Map<String, String>.from(
+        _activeHttpHeaders ?? const <String, String>{},
+      ),
+      autoplay: _isPlaying,
+      isLive: _currentIptvChannel?.isLive == true,
+    );
+  }
+
+  Future<void> _onCastPressed() async {
+    if (_castRemoteActive) {
+      try {
+        await _castService.connect();
+      } on CastException catch (error) {
+        _showCastFailure(error);
+      }
+      return;
+    }
+
+    final request = _buildCastMediaRequest();
+    if (request == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This stream cannot be sent directly to Google Cast.'),
+          ),
+        );
+      }
+      return;
+    }
+    if (request.hasUnsupportedHeaders) {
+      _showCastFailure(
+        const CastException(
+          'CAST_UNSUPPORTED_HEADERS',
+          'This stream needs HTTP headers that Google Cast cannot safely use.',
+        ),
+      );
+      return;
+    }
+
+    _pendingCastRequest = request;
+    if (_castService.connected) {
+      await _loadPendingCastRequest();
+      return;
+    }
+
+    try {
+      await _castService.connect();
+      if (mounted) setState(() {});
+    } on CastException catch (error) {
+      _pendingCastRequest = null;
+      _showCastFailure(error);
+    }
+  }
+
+  Future<void> _loadPendingCastRequest() async {
+    if (!mounted || _castLoadInFlight || !_castService.connected) return;
+
+    // Rebuild at session-start time so source, position and play/pause intent
+    // reflect what is actually on screen after the device picker closes.
+    final request = _buildCastMediaRequest();
+    if (request == null || request.hasUnsupportedHeaders) {
+      _pendingCastRequest = null;
+      _showCastFailure(
+        CastException(
+          request?.hasUnsupportedHeaders == true
+              ? 'CAST_UNSUPPORTED_HEADERS'
+              : 'CAST_INVALID_URL',
+          request?.hasUnsupportedHeaders == true
+              ? 'This stream needs HTTP headers that Google Cast cannot safely use.'
+              : 'This stream cannot be sent directly to Google Cast.',
+        ),
+      );
+      return;
+    }
+
+    _castLoadInFlight = true;
+    _castHandoffWasPlaying = request.autoplay;
+    if (mounted) setState(() {});
+
+    try {
+      await _castService.load(request);
+      if (!mounted) return;
+
+      // The receiver accepted the load. Only now yield local playback, so a
+      // failed Cast attempt can never strand the viewer on a paused phone.
+      _castRemoteActive = true;
+      _pendingCastRequest = null;
+      await _player.pause();
+      _syncWakelock(false);
+      unawaited(_saveResume(positionOverride: _position));
+      if (mounted) setState(() {});
+    } on CastException catch (error) {
+      _pendingCastRequest = null;
+      _showCastFailure(error);
+    } finally {
+      _castLoadInFlight = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _onCastServiceChanged() {
+    if (!mounted) return;
+    final snapshot = _castService.snapshot;
+
+    if (_pendingCastRequest != null &&
+        snapshot.connected &&
+        !_castRemoteActive &&
+        !_castLoadInFlight) {
+      unawaited(_loadPendingCastRequest());
+    }
+
+    if (_castRemoteActive) {
+      final position = snapshot.position;
+      final duration = snapshot.duration;
+      if (position != null) {
+        _position = position;
+        _playbackUiClock.updatePosition(position, immediate: true);
+      }
+      if (duration != null && duration > Duration.zero) {
+        _duration = duration;
+        _playbackUiClock.updateDuration(duration);
+      }
+
+      if ((snapshot.state == CastPlaybackState.disconnected ||
+              snapshot.state == CastPlaybackState.error) &&
+          !_castRestoreInFlight) {
+        unawaited(_restoreLocalAfterCast(snapshot));
+      }
+    }
+
+    setState(() {});
+  }
+
+  Future<void> _restoreLocalAfterCast(CastSnapshot snapshot) async {
+    if (!mounted || _castRestoreInFlight) return;
+    _castRestoreInFlight = true;
+    final target =
+        snapshot.resumePosition ?? snapshot.position ?? _position;
+    final shouldPlay =
+        snapshot.resumeShouldPlay ?? _castHandoffWasPlaying;
+
+    _castRemoteActive = false;
+    _pendingCastRequest = null;
+    if (mounted) setState(() {});
+
+    try {
+      if (!_playerCreated || !mounted) return;
+      if (target >= Duration.zero) {
+        await _player.seek(target);
+        _position = target;
+        _playbackUiClock.updatePosition(target, immediate: true);
+      }
+      _activeMediaUserPaused = !shouldPlay;
+      _activeMediaShouldPlay = shouldPlay;
+      if (shouldPlay) {
+        await _player.play();
+      } else {
+        await _player.pause();
+      }
+      unawaited(_saveResume(positionOverride: target));
+    } catch (error) {
+      debugPrint(
+        'Cast: local restore failed after remote session ended '
+        '(${error.runtimeType})',
+      );
+    } finally {
+      _castHandoffWasPlaying = false;
+      _castRestoreInFlight = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _showCastFailure(CastException error) {
+    if (!mounted) return;
+    final message = switch (error.code) {
+      'CAST_UNSUPPORTED_HEADERS' =>
+        'This source needs HTTP headers that Google Cast cannot safely use.',
+      'CAST_INVALID_URL' =>
+        'This source does not expose a direct HTTP/HTTPS Cast URL.',
+      'CAST_LOAD_FAILED' =>
+        'The Cast device could not start this stream. Local playback is unchanged.',
+      _ => 'Google Cast could not start. Local playback is unchanged.',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _seekUserPlayback(Duration target) {
+    if (_castRemoteActive) {
+      unawaited(
+        _castService.seek(target).then<void>((_) {}).catchError((Object error) {
+          if (error is CastException) _showCastFailure(error);
+        }),
+      );
+      _position = target;
+      _playbackUiClock.updatePosition(target, immediate: true);
+      return;
+    }
+    _player.seek(target);
+  }
+
   void _togglePlay() {
+    if (_castRemoteActive) {
+      final remotePlaying =
+          _castService.state == CastPlaybackState.playing;
+      if (remotePlaying) {
+        unawaited(
+          _castService.pause().then<void>((_) {}).catchError((Object error) {
+            if (error is CastException) _showCastFailure(error);
+          }),
+        );
+      } else {
+        unawaited(
+          _castService.play().then<void>((_) {}).catchError((Object error) {
+            if (error is CastException) _showCastFailure(error);
+          }),
+        );
+      }
+      _scheduleAutoHide();
+      return;
+    }
     if (!_isReady) return;
     if (_isPlaying) {
       _activeMediaUserPaused = true;
@@ -15440,7 +15750,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                                   },
                                   enhancedMetadata: _getEnhancedMetadata(),
                                   clock: _playbackUiClock,
-                                  isPlaying: _isPlaying,
+                                  isPlaying: _castRemoteActive
+                                      ? _castService.state ==
+                                            CastPlaybackState.playing
+                                      : _isPlaying,
                                   isReady: isReady,
                                   onPlayPause: _togglePlay,
                                   onBack: () => Navigator.of(context).pop(),
@@ -15475,7 +15788,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                                       newPos,
                                       immediate: true,
                                     );
-                                    _player.seek(newPos);
+                                    _seekUserPlayback(newPos);
                                     _lastSliderSeekPos = newPos;
                                   },
                                   onSeekBarChangeEnd: () {
@@ -15585,9 +15898,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                                                   null)
                                       ? _showSourceSheetOverlay
                                       : null,
-                                  showPipButton: PipService.isOwner(this),
-                                  onPip: PipService.isOwner(this)
+                                  showPipButton:
+                                      !_castRemoteActive &&
+                                      PipService.isOwner(this),
+                                  onPip:
+                                      !_castRemoteActive &&
+                                          PipService.isOwner(this)
                                       ? _enterPip
+                                      : null,
+                                  showCastButton:
+                                      _castRemoteActive ||
+                                      _castUiConnecting ||
+                                      _canCastCurrentMedia,
+                                  castConnected: _castUiConnected,
+                                  castConnecting: _castUiConnecting,
+                                  castError:
+                                      _castService.state ==
+                                      CastPlaybackState.error,
+                                  onCast:
+                                      _castRemoteActive ||
+                                          _castUiConnecting ||
+                                          _canCastCurrentMedia
+                                      ? () => unawaited(_onCastPressed())
                                       : null,
                                   hasRecord: _canRecord,
                                   isRecording: _recordingActiveNow,
