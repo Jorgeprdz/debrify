@@ -5,6 +5,8 @@ import androidx.mediarouter.app.MediaRouteControllerDialog
 import com.debrify.app.MainActivity
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaSeekOptions
+import com.google.android.gms.cast.MediaStatus
+import com.google.android.gms.cast.MediaTrack
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.CastState
@@ -39,6 +41,8 @@ class DebrifyCastManager(
     private var lastDurationMs: Long? = null
     private var resumeShouldPlay: Boolean? = null
     private var lastErrorCode: String? = null
+    private var endedSequence: Int = 0
+    private var endedForCurrentLoad = false
 
     private val castStateListener = CastStateListener {
         if (!disposed) emitSnapshot()
@@ -53,6 +57,7 @@ class DebrifyCastManager(
 
         override fun onMetadataUpdated() {
             captureRemotePosition()
+            updatePlaybackState()
             emitSnapshot()
         }
 
@@ -67,6 +72,7 @@ class DebrifyCastManager(
     private val progressListener = RemoteMediaClient.ProgressListener { progressMs, durationMs ->
         lastPositionMs = progressMs.takeIf { it >= 0 }
         lastDurationMs = durationMs.takeIf { it > 0 }
+        updatePlaybackState()
         emitSnapshot()
     }
 
@@ -96,7 +102,7 @@ class DebrifyCastManager(
             unbindRemoteClient()
             deviceName = null
             state = DebrifyCastState.DISCONNECTED
-            if (error != 0) lastErrorCode = "CAST_SESSION_ENDED"
+            if (error != 0) lastErrorCode = "CAST_SESSION_LOST"
             emitSnapshot()
         }
 
@@ -113,13 +119,14 @@ class DebrifyCastManager(
             captureRemotePosition()
             unbindRemoteClient()
             state = DebrifyCastState.ERROR
-            lastErrorCode = "CAST_SESSION_RESUME_FAILED"
+            lastErrorCode = "CAST_SESSION_LOST"
             emitSnapshot()
         }
 
         override fun onSessionSuspended(session: CastSession, reason: Int) {
             captureRemotePosition()
             state = DebrifyCastState.CONNECTING
+            lastErrorCode = "CAST_SESSION_LOST"
             emitSnapshot()
         }
     }
@@ -173,8 +180,15 @@ class DebrifyCastManager(
             "pause" -> runRemoteCommand(result) { it.pause() }
             "seek" -> seek(call, result)
             "stop" -> runRemoteCommand(result) { it.stop() }
+            "selectAudioTrack" -> selectAudioTrack(call, result)
+            "selectSubtitleTrack" -> selectSubtitleTrack(call, result)
+            "disableSubtitles" -> disableSubtitles(result)
             "disconnect" -> disconnect(result)
-            "getState" -> result.success(snapshot())
+            "getState" -> {
+                captureRemotePosition()
+                updatePlaybackState()
+                result.success(snapshot())
+            }
             else -> result.notImplemented()
         }
     }
@@ -184,6 +198,8 @@ class DebrifyCastManager(
         initializeCastContext()
         val session = castContext?.sessionManager?.currentCastSession
         if (session?.isConnected == true && remoteMediaClient == null) bindSession(session)
+        captureRemotePosition()
+        updatePlaybackState()
         emitSnapshot()
     }
 
@@ -251,6 +267,7 @@ class DebrifyCastManager(
         lastPositionMs = request.positionMs
         lastDurationMs = request.durationMs
         lastErrorCode = null
+        endedForCurrentLoad = false
 
         try {
             client.load(loadRequest).setResultCallback { mediaResult ->
@@ -260,8 +277,8 @@ class DebrifyCastManager(
                     result.success(snapshot())
                     emitSnapshot()
                 } else {
-                    state = DebrifyCastState.ERROR
                     lastErrorCode = "CAST_LOAD_FAILED"
+                    updatePlaybackState()
                     emitSnapshot()
                     result.error(
                         "CAST_LOAD_FAILED",
@@ -271,8 +288,8 @@ class DebrifyCastManager(
                 }
             }
         } catch (_: Exception) {
-            state = DebrifyCastState.ERROR
             lastErrorCode = "CAST_LOAD_FAILED"
+            updatePlaybackState()
             emitSnapshot()
             result.error("CAST_LOAD_FAILED", "Unable to send media to the Cast receiver.", null)
         }
@@ -290,6 +307,85 @@ class DebrifyCastManager(
             .setResumeState(MediaSeekOptions.RESUME_STATE_UNCHANGED)
             .build()
         runRemoteCommand(result) { it.seek(options) }
+    }
+
+    private fun selectAudioTrack(call: MethodCall, result: MethodChannel.Result) {
+        val id = parseTrackId(call)
+        if (id == null || findTrack(id, MediaTrack.TYPE_AUDIO) == null) {
+            result.error("CAST_TRACK_NOT_FOUND", "The requested audio track is not available.", null)
+            return
+        }
+        // Google explicitly documents that Default/Styled Media Receiver only
+        // supports text-track control through this API. Do not pretend success
+        // for audio by issuing a request the standard receiver does not support.
+        result.error(
+            "CAST_AUDIO_TRACK_UNSUPPORTED_RECEIVER",
+            "Remote audio-track selection requires a Custom Cast Receiver.",
+            mapOf("trackId" to id),
+        )
+    }
+
+    private fun selectSubtitleTrack(call: MethodCall, result: MethodChannel.Result) {
+        val id = parseTrackId(call)
+        if (id == null || findTrack(id, MediaTrack.TYPE_TEXT) == null) {
+            result.error("CAST_TRACK_NOT_FOUND", "The requested subtitle track is not available.", null)
+            return
+        }
+        val active = activeTrackIdsExcluding(MediaTrack.TYPE_TEXT).toMutableList()
+        active.add(id)
+        setActiveTracks(active.toLongArray(), result)
+    }
+
+    private fun disableSubtitles(result: MethodChannel.Result) {
+        setActiveTracks(
+            activeTrackIdsExcluding(MediaTrack.TYPE_TEXT).toLongArray(),
+            result,
+        )
+    }
+
+    private fun setActiveTracks(ids: LongArray, result: MethodChannel.Result) {
+        val client = connectedClient(result) ?: return
+        try {
+            client.setActiveMediaTracks(ids).setResultCallback { mediaResult ->
+                if (mediaResult.status.isSuccess) {
+                    updatePlaybackState()
+                    result.success(snapshot())
+                    emitSnapshot()
+                } else {
+                    result.error(
+                        "CAST_TRACK_SELECTION_FAILED",
+                        "The Cast receiver rejected the track selection.",
+                        mapOf("statusCode" to mediaResult.status.statusCode),
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            result.error(
+                "CAST_TRACK_SELECTION_FAILED",
+                "Unable to change Cast media tracks.",
+                null,
+            )
+        }
+    }
+
+    private fun parseTrackId(call: MethodCall): Long? {
+        val raw = call.argument<Any>("trackId") ?: return null
+        return when (raw) {
+            is Number -> raw.toLong()
+            is String -> raw.toLongOrNull()
+            else -> null
+        }
+    }
+
+    private fun findTrack(id: Long, type: Int): MediaTrack? =
+        remoteMediaClient?.mediaInfo?.mediaTracks
+            ?.firstOrNull { it.id == id && it.type == type }
+
+    private fun activeTrackIdsExcluding(type: Int): List<Long> {
+        val tracks = remoteMediaClient?.mediaInfo?.mediaTracks.orEmpty()
+        val active = remoteMediaClient?.mediaStatus?.activeTrackIds?.toSet().orEmpty()
+        val excluded = tracks.filter { it.type == type }.map { it.id }.toSet()
+        return active.filterNot { excluded.contains(it) }
     }
 
     private fun runRemoteCommand(
@@ -337,7 +433,7 @@ class DebrifyCastManager(
         val session = castContext?.sessionManager?.currentCastSession
         val client = session?.takeIf { it.isConnected }?.remoteMediaClient
         if (client == null) {
-            result.error("CAST_NOT_CONNECTED", "No active Cast session.", null)
+            result.error("CAST_SESSION_LOST", "No active Cast session.", null)
             return null
         }
         if (client !== remoteMediaClient) bindSession(session)
@@ -387,8 +483,34 @@ class DebrifyCastManager(
 
     private fun updatePlaybackState() {
         val client = remoteMediaClient
+        if (client == null) {
+            state = DebrifyCastState.DISCONNECTED
+            return
+        }
+
+        val status = client.mediaStatus
+        val finished =
+            status?.playerState == MediaStatus.PLAYER_STATE_IDLE &&
+                status.idleReason == MediaStatus.IDLE_REASON_FINISHED
+
+        if (finished) {
+            if (!endedForCurrentLoad) {
+                endedForCurrentLoad = true
+                endedSequence += 1
+            }
+            state = DebrifyCastState.ENDED
+            resumeShouldPlay = false
+            return
+        }
+
+        if (status != null &&
+            status.playerState != MediaStatus.PLAYER_STATE_IDLE &&
+            status.playerState != MediaStatus.PLAYER_STATE_UNKNOWN
+        ) {
+            endedForCurrentLoad = false
+        }
+
         state = when {
-            client == null -> DebrifyCastState.DISCONNECTED
             runCatching { client.isPlaying }.getOrDefault(false) -> DebrifyCastState.PLAYING
             runCatching { client.isPaused }.getOrDefault(false) -> DebrifyCastState.PAUSED
             else -> DebrifyCastState.CONNECTED
@@ -406,6 +528,37 @@ class DebrifyCastManager(
         }.getOrDefault(false)
     }
 
+    private fun trackSnapshot(type: Int): List<Map<String, Any?>> {
+        val tracks = remoteMediaClient?.mediaInfo?.mediaTracks.orEmpty()
+        val active = remoteMediaClient?.mediaStatus?.activeTrackIds?.toSet().orEmpty()
+        return tracks
+            .filter { it.type == type }
+            .map { track ->
+                mapOf(
+                    "id" to track.id.toString(),
+                    "type" to when (track.type) {
+                        MediaTrack.TYPE_AUDIO -> "audio"
+                        MediaTrack.TYPE_TEXT -> "subtitle"
+                        MediaTrack.TYPE_VIDEO -> "video"
+                        else -> "unknown"
+                    },
+                    "language" to track.language,
+                    "label" to track.name,
+                    "mimeType" to track.contentType,
+                    // Cast MediaTrack does not expose codec as a first-class
+                    // field. Leave null rather than inferring from MIME/name.
+                    "codec" to null,
+                    "selected" to active.contains(track.id),
+                )
+            }
+    }
+
+    private fun selectedTrackId(type: Int): String? =
+        trackSnapshot(type)
+            .firstOrNull { it["selected"] == true }
+            ?.get("id")
+            ?.toString()
+
     private fun snapshot(): Map<String, Any?> = mapOf(
         "available" to isCastAvailable(),
         "connected" to (remoteMediaClient != null),
@@ -416,6 +569,11 @@ class DebrifyCastManager(
         "resumePositionMs" to lastPositionMs,
         "resumeShouldPlay" to resumeShouldPlay,
         "errorCode" to lastErrorCode,
+        "availableAudioTracks" to trackSnapshot(MediaTrack.TYPE_AUDIO),
+        "availableSubtitleTracks" to trackSnapshot(MediaTrack.TYPE_TEXT),
+        "selectedAudioTrack" to selectedTrackId(MediaTrack.TYPE_AUDIO),
+        "selectedSubtitleTrack" to selectedTrackId(MediaTrack.TYPE_TEXT),
+        "endedSequence" to endedSequence,
     )
 
     private fun emitSnapshot() {

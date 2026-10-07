@@ -58,7 +58,7 @@ class PlayerMenuPanel extends StatefulWidget {
   // ── Audio ──
   final List<PlayerMenuTrackOption> audioTracks;
   final String selectedAudioId;
-  final Future<void> Function(String audioId, String currentSubId)
+  final Future<bool> Function(String audioId, String currentSubId)
   onAudioSelected;
 
   /// Android bitstream passthrough — null hides the row (other platforms).
@@ -652,8 +652,11 @@ class PlayerMenuPanelState extends State<PlayerMenuPanel>
       tappedId != _selectedSub && _selectedSub != 'auto';
 
   Future<void> _selectAudio(String id) async {
+    final previous = _selectedAudio;
     setState(() => _selectedAudio = id);
-    await widget.onAudioSelected(id, _selectedSub);
+    final ok = await widget.onAudioSelected(id, _selectedSub);
+    if (!mounted || ok) return;
+    setState(() => _selectedAudio = previous);
   }
 
   Future<void> _selectSubtitlesOff() async {

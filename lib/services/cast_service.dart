@@ -4,12 +4,15 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'cast_phase2_policy.dart';
+
 enum CastPlaybackState {
   disconnected,
   connecting,
   connected,
   playing,
   paused,
+  ended,
   error;
 
   static CastPlaybackState fromWire(Object? value) {
@@ -32,6 +35,11 @@ class CastSnapshot {
   final Duration? resumePosition;
   final bool? resumeShouldPlay;
   final String? errorCode;
+  final List<CastRemoteTrack> availableAudioTracks;
+  final List<CastRemoteTrack> availableSubtitleTracks;
+  final String? selectedAudioTrack;
+  final String? selectedSubtitleTrack;
+  final int endedSequence;
 
   const CastSnapshot({
     this.available = false,
@@ -43,6 +51,11 @@ class CastSnapshot {
     this.resumePosition,
     this.resumeShouldPlay,
     this.errorCode,
+    this.availableAudioTracks = const <CastRemoteTrack>[],
+    this.availableSubtitleTracks = const <CastRemoteTrack>[],
+    this.selectedAudioTrack,
+    this.selectedSubtitleTrack,
+    this.endedSequence = 0,
   });
 
   factory CastSnapshot.fromMap(Map<Object?, Object?> raw) {
@@ -58,6 +71,22 @@ class CastSnapshot {
       return text == null || text.isEmpty ? null : text;
     }
 
+    List<CastRemoteTrack> trackList(Object? value) {
+      if (value is! List) return const <CastRemoteTrack>[];
+      return value
+          .whereType<Map>()
+          .map(
+            (track) => CastRemoteTrack.fromMap(
+              Map<Object?, Object?>.from(track),
+            ),
+          )
+          .where((track) => track.id.isNotEmpty)
+          .toList(growable: false);
+    }
+
+    final audioTracks = trackList(raw['availableAudioTracks']);
+    final subtitleTracks = trackList(raw['availableSubtitleTracks']);
+
     return CastSnapshot(
       available: raw['available'] == true,
       connected: raw['connected'] == true,
@@ -70,8 +99,38 @@ class CastSnapshot {
           ? raw['resumeShouldPlay'] as bool
           : null,
       errorCode: stringValue(raw['errorCode']),
+      availableAudioTracks: audioTracks,
+      availableSubtitleTracks: subtitleTracks,
+      selectedAudioTrack: stringValue(raw['selectedAudioTrack']),
+      selectedSubtitleTrack: stringValue(raw['selectedSubtitleTrack']),
+      endedSequence: (raw['endedSequence'] as num?)?.toInt() ?? 0,
     );
   }
+}
+
+@immutable
+class CastTextTrackRequest {
+  final int id;
+  final String url;
+  final String language;
+  final String label;
+  final String mimeType;
+
+  const CastTextTrackRequest({
+    required this.id,
+    required this.url,
+    required this.language,
+    required this.label,
+    this.mimeType = 'text/vtt',
+  });
+
+  Map<String, Object?> toMap() => <String, Object?>{
+    'id': id,
+    'url': url,
+    'language': language,
+    'label': label,
+    'mimeType': mimeType,
+  };
 }
 
 @immutable
@@ -88,6 +147,7 @@ class CastMediaRequest {
   final Duration? position;
   final Duration? duration;
   final Map<String, String> headers;
+  final List<CastTextTrackRequest> textTracks;
   final bool autoplay;
   final bool isLive;
 
@@ -104,9 +164,44 @@ class CastMediaRequest {
     this.position,
     this.duration,
     this.headers = const <String, String>{},
+    this.textTracks = const <CastTextTrackRequest>[],
     this.autoplay = true,
     this.isLive = false,
   });
+
+  CastMediaRequest copyWith({
+    String? url,
+    String? mimeType,
+    String? title,
+    String? subtitle,
+    String? seriesTitle,
+    int? season,
+    int? episode,
+    String? posterUrl,
+    String? backdropUrl,
+    Duration? position,
+    Duration? duration,
+    Map<String, String>? headers,
+    List<CastTextTrackRequest>? textTracks,
+    bool? autoplay,
+    bool? isLive,
+  }) => CastMediaRequest(
+    url: url ?? this.url,
+    mimeType: mimeType ?? this.mimeType,
+    title: title ?? this.title,
+    subtitle: subtitle ?? this.subtitle,
+    seriesTitle: seriesTitle ?? this.seriesTitle,
+    season: season ?? this.season,
+    episode: episode ?? this.episode,
+    posterUrl: posterUrl ?? this.posterUrl,
+    backdropUrl: backdropUrl ?? this.backdropUrl,
+    position: position ?? this.position,
+    duration: duration ?? this.duration,
+    headers: headers ?? this.headers,
+    textTracks: textTracks ?? this.textTracks,
+    autoplay: autoplay ?? this.autoplay,
+    isLive: isLive ?? this.isLive,
+  );
 
   bool get isDirectHttpUrl => isDirectHttpMediaUrl(url);
   bool get hasUnsupportedHeaders =>
@@ -129,6 +224,8 @@ class CastMediaRequest {
     if (duration != null && !duration!.isNegative)
       'durationMs': duration!.inMilliseconds,
     if (headers.isNotEmpty) 'headers': Map<String, String>.from(headers),
+    if (textTracks.isNotEmpty)
+      'textTracks': textTracks.map((track) => track.toMap()).toList(growable: false),
     'autoplay': autoplay,
     'isLive': isLive,
   };
@@ -187,6 +284,9 @@ class CastService extends ChangeNotifier {
   StreamSubscription<dynamic>? _eventSubscription;
   bool _initialized = false;
   Future<void>? _initializing;
+  String? sessionAudioLanguage;
+  String? sessionSubtitleLanguage;
+  bool sessionSubtitlesDisabled = false;
 
   CastSnapshot get snapshot => _snapshot;
   bool get available => _snapshot.available;
@@ -195,6 +295,13 @@ class CastService extends ChangeNotifier {
   String? get deviceName => _snapshot.deviceName;
   Duration? get position => _snapshot.position;
   Duration? get duration => _snapshot.duration;
+  List<CastRemoteTrack> get availableAudioTracks =>
+      _snapshot.availableAudioTracks;
+  List<CastRemoteTrack> get availableSubtitleTracks =>
+      _snapshot.availableSubtitleTracks;
+  String? get selectedAudioTrack => _snapshot.selectedAudioTrack;
+  String? get selectedSubtitleTrack => _snapshot.selectedSubtitleTrack;
+  int get endedSequence => _snapshot.endedSequence;
 
   Future<void> initialize() {
     if (_initialized || !Platform.isAndroid) {
@@ -231,6 +338,11 @@ class CastService extends ChangeNotifier {
             duration: _snapshot.duration,
             resumePosition: _snapshot.resumePosition,
             resumeShouldPlay: _snapshot.resumeShouldPlay,
+            availableAudioTracks: _snapshot.availableAudioTracks,
+            availableSubtitleTracks: _snapshot.availableSubtitleTracks,
+            selectedAudioTrack: _snapshot.selectedAudioTrack,
+            selectedSubtitleTrack: _snapshot.selectedSubtitleTrack,
+            endedSequence: _snapshot.endedSequence,
             errorCode: error is PlatformException
                 ? error.code
                 : 'CAST_EVENT_ERROR',
@@ -304,7 +416,74 @@ class CastService extends ChangeNotifier {
   }
 
   Future<CastSnapshot> stop() => _invokeSnapshot('stop');
-  Future<CastSnapshot> disconnect() => _invokeSnapshot('disconnect');
+
+  Future<CastSnapshot> selectAudioTrack(String trackId) =>
+      _invokeSnapshot(
+        'selectAudioTrack',
+        <String, Object?>{'trackId': trackId},
+      );
+
+  Future<CastSnapshot> selectSubtitleTrack(String trackId) =>
+      _invokeSnapshot(
+        'selectSubtitleTrack',
+        <String, Object?>{'trackId': trackId},
+      );
+
+  Future<CastSnapshot> disableSubtitles() =>
+      _invokeSnapshot('disableSubtitles');
+
+  void rememberAudioLanguage(String? language) {
+    final value = language?.trim();
+    sessionAudioLanguage = value == null || value.isEmpty ? null : value;
+  }
+
+  void rememberSubtitleLanguage(String? language) {
+    final value = language?.trim();
+    sessionSubtitleLanguage = value == null || value.isEmpty ? null : value;
+    sessionSubtitlesDisabled = false;
+  }
+
+  void rememberSubtitlesDisabled() {
+    sessionSubtitleLanguage = null;
+    sessionSubtitlesDisabled = true;
+  }
+
+  void restoreSessionTrackIntent(CastSnapshot snapshot) {
+    if (sessionAudioLanguage == null && snapshot.selectedAudioTrack != null) {
+      for (final track in snapshot.availableAudioTracks) {
+        if (track.id == snapshot.selectedAudioTrack) {
+          rememberAudioLanguage(track.language ?? track.label);
+          break;
+        }
+      }
+    }
+
+    if (!sessionSubtitlesDisabled && sessionSubtitleLanguage == null) {
+      final selectedId = snapshot.selectedSubtitleTrack;
+      if (selectedId != null) {
+        for (final track in snapshot.availableSubtitleTracks) {
+          if (track.id == selectedId) {
+            rememberSubtitleLanguage(track.language ?? track.label);
+            break;
+          }
+        }
+      } else if (snapshot.availableSubtitleTracks.isNotEmpty) {
+        rememberSubtitlesDisabled();
+      }
+    }
+  }
+
+  void clearSessionTrackIntent() {
+    sessionAudioLanguage = null;
+    sessionSubtitleLanguage = null;
+    sessionSubtitlesDisabled = false;
+  }
+
+  Future<CastSnapshot> disconnect() async {
+    final snapshot = await _invokeSnapshot('disconnect');
+    clearSessionTrackIntent();
+    return snapshot;
+  }
 
   Future<CastSnapshot> refresh() => _invokeSnapshot('getState');
 

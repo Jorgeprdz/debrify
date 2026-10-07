@@ -87,6 +87,7 @@ class StyledDock extends StatelessWidget {
   final bool castConnected;
   final bool castConnecting;
   final bool castError;
+  final String? castDeviceName;
   final VoidCallback? onCast;
 
   final bool hasNext;
@@ -186,6 +187,7 @@ class StyledDock extends StatelessWidget {
     this.castConnected = false,
     this.castConnecting = false,
     this.castError = false,
+    this.castDeviceName,
     this.onCast,
     this.hasNext = false,
     this.hasPrevious = false,
@@ -402,6 +404,19 @@ class StyledDock extends StatelessWidget {
                       style: TextStyle(
                         color: palette.inkDim,
                         fontSize: metrics.label,
+                      ),
+                    ),
+                  if (castConnected &&
+                      castDeviceName?.trim().isNotEmpty == true)
+                    Text(
+                      'CASTING TO: ${castDeviceName!.trim()}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.inkDim,
+                        fontSize: metrics.label * 0.9,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.4,
                       ),
                     ),
                 ],

@@ -6,5 +6,6 @@ enum class DebrifyCastState(val wireValue: String) {
     CONNECTED("connected"),
     PLAYING("playing"),
     PAUSED("paused"),
+    ENDED("ended"),
     ERROR("error"),
 }
