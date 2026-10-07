@@ -1,0 +1,426 @@
+{
+  "groups": [
+    {
+      "id": "resolution",
+      "name": "Resolution",
+      "color": "#FF16A34A",
+      "isExpanded": true
+    },
+    {
+      "id": "release",
+      "name": "Release",
+      "color": "#FF2563EB",
+      "isExpanded": true
+    },
+    {
+      "id": "video",
+      "name": "Video",
+      "color": "#FF0891B2",
+      "isExpanded": true
+    },
+    {
+      "id": "hdr",
+      "name": "HDR",
+      "color": "#FF7C3AED",
+      "isExpanded": true
+    },
+    {
+      "id": "audio",
+      "name": "Audio",
+      "color": "#FF0F766E",
+      "isExpanded": true
+    },
+    {
+      "id": "channels",
+      "name": "Channels",
+      "color": "#FF475569",
+      "isExpanded": true
+    },
+    {
+      "id": "language",
+      "name": "Language",
+      "color": "#FF334155",
+      "isExpanded": true
+    },
+    {
+      "id": "warning",
+      "name": "Compatibility warnings",
+      "color": "#FFB91C1C",
+      "isExpanded": true
+    }
+  ],
+  "filters": [
+    {
+      "id": "res-4k",
+      "groupId": "resolution",
+      "name": "4K",
+      "type": "filter",
+      "pattern": "(?i)(?:\\b2160p\\b|\\b4k\\b|\\buhd\\b)",
+      "isEnabled": true,
+      "tagColor": "#FF16A34A",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF16A34A"
+    },
+    {
+      "id": "res-1080",
+      "groupId": "resolution",
+      "name": "1080P",
+      "type": "filter",
+      "pattern": "(?i)\\b1080p\\b",
+      "isEnabled": true,
+      "tagColor": "#FF15803D",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF15803D"
+    },
+    {
+      "id": "res-720",
+      "groupId": "resolution",
+      "name": "720P",
+      "type": "filter",
+      "pattern": "(?i)\\b720p\\b",
+      "isEnabled": true,
+      "tagColor": "#FF64748B",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF64748B"
+    },
+    {
+      "id": "rel-remux",
+      "groupId": "release",
+      "name": "REMUX",
+      "type": "filter",
+      "pattern": "(?i)\\bremux\\b",
+      "isEnabled": true,
+      "tagColor": "#FF1D4ED8",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF1D4ED8"
+    },
+    {
+      "id": "rel-bluray",
+      "groupId": "release",
+      "name": "BLURAY",
+      "type": "filter",
+      "pattern": "(?i)\\bblu[ ._-]?ray\\b",
+      "isEnabled": true,
+      "tagColor": "#FF2563EB",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF2563EB"
+    },
+    {
+      "id": "rel-webdl",
+      "groupId": "release",
+      "name": "WEB-DL",
+      "type": "filter",
+      "pattern": "(?i)\\bweb[ ._-]?dl\\b",
+      "isEnabled": true,
+      "tagColor": "#FF0284C7",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF0284C7"
+    },
+    {
+      "id": "rel-webrip",
+      "groupId": "release",
+      "name": "WEBRIP",
+      "type": "filter",
+      "pattern": "(?i)\\bweb[ ._-]?rip\\b",
+      "isEnabled": true,
+      "tagColor": "#FF0369A1",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF0369A1"
+    },
+    {
+      "id": "vid-hevc",
+      "groupId": "video",
+      "name": "HEVC",
+      "type": "filter",
+      "pattern": "(?i)\\b(?:hevc|h[ ._-]?265|x265)\\b",
+      "isEnabled": true,
+      "tagColor": "#FF0891B2",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF0891B2"
+    },
+    {
+      "id": "vid-avc",
+      "groupId": "video",
+      "name": "AVC",
+      "type": "filter",
+      "pattern": "(?i)\\b(?:avc|h[ ._-]?264|x264)\\b",
+      "isEnabled": true,
+      "tagColor": "#FF0E7490",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF0E7490"
+    },
+    {
+      "id": "hdr-dv",
+      "groupId": "hdr",
+      "name": "DV",
+      "type": "filter",
+      "pattern": "(?i)\\b(?:dolby[ ._-]?vision|dovi|dv)\\b",
+      "isEnabled": true,
+      "tagColor": "#FF7C3AED",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF7C3AED"
+    },
+    {
+      "id": "hdr-10plus",
+      "groupId": "hdr",
+      "name": "HDR10+",
+      "type": "filter",
+      "pattern": "(?i)\\bhdr10\\+",
+      "isEnabled": true,
+      "tagColor": "#FF9333EA",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF9333EA"
+    },
+    {
+      "id": "hdr-10",
+      "groupId": "hdr",
+      "name": "HDR10",
+      "type": "filter",
+      "pattern": "(?i)\\bhdr10\\b(?!\\+)",
+      "isEnabled": true,
+      "tagColor": "#FF8B5CF6",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF8B5CF6"
+    },
+    {
+      "id": "hdr-generic",
+      "groupId": "hdr",
+      "name": "HDR",
+      "type": "filter",
+      "pattern": "(?i)\\bhdr\\b(?!\\s*10)",
+      "isEnabled": true,
+      "tagColor": "#FFA855F7",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFA855F7"
+    },
+    {
+      "id": "hdr-sdr",
+      "groupId": "hdr",
+      "name": "SDR",
+      "type": "filter",
+      "pattern": "(?i)\\bsdr\\b",
+      "isEnabled": true,
+      "tagColor": "#FF64748B",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF64748B"
+    },
+    {
+      "id": "aud-ddp",
+      "groupId": "audio",
+      "name": "DD+",
+      "type": "filter",
+      "pattern": "(?i)(?:\\bddp(?:[ ._-]?\\d(?:\\.\\d)?)?\\b|\\be[ ._-]?ac[ ._-]?3\\b|\\bdd\\+\\b|dolby[ ._-]?digital[ ._-]?plus)",
+      "isEnabled": true,
+      "tagColor": "#FF0F766E",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF0F766E"
+    },
+    {
+      "id": "aud-dd",
+      "groupId": "audio",
+      "name": "DD",
+      "type": "filter",
+      "pattern": "(?i)(?:\\bac[ ._-]?3\\b|dolby[ ._-]?digital\\b)",
+      "isEnabled": true,
+      "tagColor": "#FF0D9488",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF0D9488"
+    },
+    {
+      "id": "aud-aac",
+      "groupId": "audio",
+      "name": "AAC",
+      "type": "filter",
+      "pattern": "(?i)\\baac\\b",
+      "isEnabled": true,
+      "tagColor": "#FF14B8A6",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF14B8A6"
+    },
+    {
+      "id": "aud-opus",
+      "groupId": "audio",
+      "name": "OPUS",
+      "type": "filter",
+      "pattern": "(?i)\\bopus\\b",
+      "isEnabled": true,
+      "tagColor": "#FF475569",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF475569"
+    },
+    {
+      "id": "ch-51",
+      "groupId": "channels",
+      "name": "5.1",
+      "type": "filter",
+      "pattern": "(?i)(?:\\b5[ ._-]?1\\b|\\b6ch\\b)",
+      "isEnabled": true,
+      "tagColor": "#FF475569",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF475569"
+    },
+    {
+      "id": "ch-20",
+      "groupId": "channels",
+      "name": "2.0",
+      "type": "filter",
+      "pattern": "(?i)(?:\\b2[ ._-]?0\\b|\\b2ch\\b|stereo)",
+      "isEnabled": true,
+      "tagColor": "#FF64748B",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF64748B"
+    },
+    {
+      "id": "lang-es",
+      "groupId": "language",
+      "name": "ES",
+      "type": "filter",
+      "pattern": "(?i)(?:\\b(?:spanish|espa(?:ñ|n)ol|latino|castellano|spa)\\b|🇪🇸|🇲🇽)",
+      "isEnabled": true,
+      "tagColor": "#FF334155",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF334155"
+    },
+    {
+      "id": "lang-en",
+      "groupId": "language",
+      "name": "EN",
+      "type": "filter",
+      "pattern": "(?i)(?:\\b(?:english|eng)\\b|🇺🇸|🇬🇧)",
+      "isEnabled": true,
+      "tagColor": "#FF334155",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FF334155"
+    },
+    {
+      "id": "warn-av1",
+      "groupId": "warning",
+      "name": "⚠ AV1",
+      "type": "filter",
+      "pattern": "(?i)\\bav1\\b",
+      "isEnabled": true,
+      "tagColor": "#FFB91C1C",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFB91C1C"
+    },
+    {
+      "id": "warn-truehd",
+      "groupId": "warning",
+      "name": "⚠ TRUEHD",
+      "type": "filter",
+      "pattern": "(?i)\\btrue[ ._-]?hd\\b",
+      "isEnabled": true,
+      "tagColor": "#FFB91C1C",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFB91C1C"
+    },
+    {
+      "id": "warn-dts",
+      "groupId": "warning",
+      "name": "⚠ DTS",
+      "type": "filter",
+      "pattern": "(?i)\\bdts(?:[ ._-]?(?:hd|x|ma))?\\b",
+      "isEnabled": true,
+      "tagColor": "#FFB91C1C",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFB91C1C"
+    },
+    {
+      "id": "warn-flac",
+      "groupId": "warning",
+      "name": "⚠ FLAC",
+      "type": "filter",
+      "pattern": "(?i)\\bflac\\b",
+      "isEnabled": true,
+      "tagColor": "#FFB91C1C",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFB91C1C"
+    },
+    {
+      "id": "warn-71",
+      "groupId": "warning",
+      "name": "⚠ 7.1",
+      "type": "filter",
+      "pattern": "(?i)\\b7[ ._-]?1\\b",
+      "isEnabled": true,
+      "tagColor": "#FFB91C1C",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFB91C1C"
+    },
+    {
+      "id": "warn-61",
+      "groupId": "warning",
+      "name": "⚠ 6.1",
+      "type": "filter",
+      "pattern": "(?i)\\b6[ ._-]?1\\b",
+      "isEnabled": true,
+      "tagColor": "#FFB91C1C",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFB91C1C"
+    },
+    {
+      "id": "warn-ru",
+      "groupId": "warning",
+      "name": "⚠ RU",
+      "type": "filter",
+      "pattern": "(?i)(?:\\b(?:russian|rus)\\b|🇷🇺)",
+      "isEnabled": true,
+      "tagColor": "#FFB91C1C",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFB91C1C"
+    },
+    {
+      "id": "warn-pl",
+      "groupId": "warning",
+      "name": "⚠ PL",
+      "type": "filter",
+      "pattern": "(?i)(?:\\b(?:polish|pol)\\b|🇵🇱)",
+      "isEnabled": true,
+      "tagColor": "#FFB91C1C",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFB91C1C"
+    },
+    {
+      "id": "warn-ua",
+      "groupId": "warning",
+      "name": "⚠ UA",
+      "type": "filter",
+      "pattern": "(?i)(?:\\b(?:ukrainian|ukr)\\b|🇺🇦)",
+      "isEnabled": true,
+      "tagColor": "#FFB91C1C",
+      "tagStyle": "filled",
+      "textColor": "#FFFFFFFF",
+      "borderColor": "#FFB91C1C"
+    }
+  ]
+}
