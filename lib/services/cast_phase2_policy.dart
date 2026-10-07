@@ -67,6 +67,73 @@ class CastEndedGate {
   }
 }
 
+
+/** Defers a percentage seek until a confirmed, identifiable new Cast load. */
+class CastStartPercentGate {
+  int _generation = 0;
+  int? _pendingGeneration;
+  String? _contentId;
+  int? _previousSessionId;
+  double? _fraction;
+  bool _confirmed = false;
+
+  bool isCurrent(int generation) =>
+      _pendingGeneration == generation && _generation == generation;
+
+  int prepare({
+    required String contentId,
+    required int? previousMediaSessionId,
+    required double? startAtPercent,
+  }) {
+    cancel();
+    final ticket = _generation;
+    if (startAtPercent == null ||
+        !startAtPercent.isFinite ||
+        startAtPercent <= 0) return ticket;
+    _pendingGeneration = ticket;
+    _contentId = contentId;
+    _previousSessionId = previousMediaSessionId;
+    _fraction = startAtPercent.clamp(0.0, 1.0);
+    return ticket;
+  }
+
+  void confirm(int ticket) {
+    if (isCurrent(ticket)) _confirmed = true;
+  }
+
+  Duration? claim({
+    required String? contentId,
+    required int? mediaSessionId,
+    required Duration? duration,
+  }) {
+    final fraction = _fraction;
+    // Missing identity fails closed, even if an old duration looks usable.
+    if (!_confirmed || fraction == null ||
+        contentId == null || contentId != _contentId ||
+        _previousSessionId == null || mediaSessionId == null ||
+        mediaSessionId <= 0 || mediaSessionId == _previousSessionId ||
+        duration == null || duration <= Duration.zero) return null;
+    final target = Duration(
+      milliseconds: (duration.inMilliseconds * fraction).round());
+    cancel(); // At most one asynchronous seek per accepted load.
+    return target;
+  }
+
+  void cancel() {
+    _generation++;
+    _pendingGeneration = null;
+    _contentId = null;
+    _previousSessionId = null;
+    _fraction = null;
+    _confirmed = false;
+  }
+}
+
+class StremioTvNextRecovery {
+  static bool canResumeLocal(PlaybackOwner owner, bool requested) =>
+      requested && owner == PlaybackOwner.local;
+}
+
 class CastSwitchTransaction<T> {
   final T previous;
   final Duration position;

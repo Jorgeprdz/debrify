@@ -2,6 +2,24 @@ import 'package:debrify/services/cast_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('Cast load snapshot identity', () {
+    test('parses actual media identity and duration', () {
+      final snap = CastService.parseSnapshot(<Object?, Object?>{
+        'mediaContentId': 'https://example.test/next.mp4',
+        'mediaSessionId': 42, 'durationMs': 75000,
+      });
+      expect(snap.mediaContentId, 'https://example.test/next.mp4');
+      expect(snap.mediaSessionId, 42);
+      expect(snap.duration, const Duration(seconds: 75));
+    });
+    test('does not invent missing media identity', () {
+      final snap = CastService.parseSnapshot(<Object?, Object?>{
+        'durationMs': 75000,
+      });
+      expect(snap.mediaContentId, isNull);
+      expect(snap.mediaSessionId, isNull);
+    });
+  });
   group('CastMediaRequest', () {
     test('serializes direct media request without optional metadata', () {
       const request = CastMediaRequest(

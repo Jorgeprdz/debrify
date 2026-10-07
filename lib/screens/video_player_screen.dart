@@ -519,7 +519,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   bool _castSourceSwitchInProgress = false;
   final CastEndedGate _castEndedGate = CastEndedGate();
   int _castNavigationGeneration = 0;
-  double? _castPendingStartPercent;
+  final CastStartPercentGate _castStartPercentGate = CastStartPercentGate();
   CastPlaybackState _lastCastPlaybackState = CastPlaybackState.disconnected;
   final Map<String, StremioSubtitle> _castStremioSubtitleTrackIds =
       <String, StremioSubtitle>{};
@@ -10573,9 +10573,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       return false;
     }
 
-    final ownsSwitchGate = !_castSourceSwitchInProgress;
-    if (ownsSwitchGate) _castSourceSwitchInProgress = true;
-    _stopCastTrackingForNavigation();
+    if (_castSourceSwitchInProgress) return false;
+    _castSourceSwitchInProgress = true;
+    final percentTicket = _castStartPercentGate.prepare(
+      contentId: request.url,
+      previousMediaSessionId: _castService.snapshot.mediaSessionId,
+      startAtPercent: startAtPercent,
+    );
     try {
       final committed = await _loadCastReplacement(
         request,
@@ -10583,8 +10587,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         failureMessage: 'Stremio TV could not switch this Cast stream.',
         showFailure: true,
         rollbackOnFailure: rollbackOnFailure,
+        pendingStartGeneration: percentTicket,
       );
-      if (!committed || !mounted) return false;
+      if (!committed || !mounted) {
+        _castStartPercentGate.cancel();
+        return false;
+      }
+      _castStartPercentGate.confirm(percentTicket);
+      _maybeApplyCastPendingStart(_castService.snapshot);
+      _stopCastTrackingForNavigation();
 
       setState(() {
         _currentStremioTvChannelId = channelId;
@@ -10596,8 +10607,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         _currentStremioTvContentTitle = title;
         _currentStreamUrl = url;
         _activeHttpHeaders = source?.httpHeaders;
-        _castPendingStartPercent =
-            startAtPercent != null && startAtPercent > 0 ? startAtPercent : null;
         _applyStremioTvGuidePlaybackData(
           channelId,
           nowPlaying: nowPlaying,
@@ -10621,7 +10630,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       _syncCastTrackingState(_castService.snapshot, force: true);
       return true;
     } finally {
-      if (ownsSwitchGate) _castSourceSwitchInProgress = false;
+      _castSourceSwitchInProgress = false;
       if (_castRemoteActive) {
         _syncCastTrackingState(_castService.snapshot);
       }
@@ -10644,6 +10653,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     Future<String?> Function(Torrent)? sourceResolver,
   }) async {
     _hideStremioTvGuide();
+    if (!_playbackOwnership.isLocal && !_castRemoteActive) return;
     if (_castRemoteActive) {
       await _switchCastStremioTvChannel(
         channelId,
@@ -10747,24 +10757,29 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     if (requestNext == null || channelId == null || channelId.isEmpty) {
       return false;
     }
-    if (_showStremioTvNextLoading) {
-      return true;
-    }
+    if (_showStremioTvNextLoading) return false;
+    final generation = _castAdvanceInProgress
+        ? _castNavigationGeneration
+        : ++_castNavigationGeneration;
 
     Map<String, dynamic>? result;
     _setStremioTvNextLoading(true);
     try {
       result = await requestNext(channelId);
-    } catch (e) {
-      debugPrint('Player: Stremio TV next failed: $e');
+    } catch (_) {
+      debugPrint('Player: Stremio TV next provider failed.');
     }
 
-    if (!mounted) return true;
+    if (!mounted || generation != _castNavigationGeneration) {
+      _setStremioTvNextLoading(false);
+      return false;
+    }
     _setStremioTvNextLoading(false);
 
     if (result == null) {
       setState(() => _isTransitioning = false);
-      if (!resumeCurrentOnFailure) return false;
+      if (!StremioTvNextRecovery.canResumeLocal(
+        _playbackOwnership.owner, resumeCurrentOnFailure)) return false;
       try {
         await _player.play();
       } catch (_) {}
@@ -10775,7 +10790,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final title = result['title'] as String? ?? _dynamicTitle;
     if (url == null || url.isEmpty) {
       setState(() => _isTransitioning = false);
-      if (!resumeCurrentOnFailure) return false;
+      if (!StremioTvNextRecovery.canResumeLocal(
+        _playbackOwnership.owner, resumeCurrentOnFailure)) return false;
       try {
         await _player.play();
       } catch (_) {}
@@ -10786,7 +10802,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final sourceResolver =
         result['sourceResolver'] as Future<String?> Function(Torrent)?;
 
-    if (_castRemoteActive) {
+    if (_playbackOwnership.isCast && _castRemoteActive) {
       return _switchCastStremioTvChannel(
         result['channelId'] as String? ?? channelId,
         url,
@@ -10809,6 +10825,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       );
     }
 
+    if (!_playbackOwnership.isLocal) return false;
     await _switchToStremioTvChannel(
       result['channelId'] as String? ?? channelId,
       url,
@@ -10879,16 +10896,31 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       return false;
     }
 
-    final ownsSwitchGate = !_castSourceSwitchInProgress;
-    if (ownsSwitchGate) _castSourceSwitchInProgress = true;
-    _stopCastTrackingForNavigation();
+    if (_castSourceSwitchInProgress) return false;
+    _castSourceSwitchInProgress = true;
+    final desiredStart = widget.startFromRandom
+        ? _random.nextDouble() *
+            widget.randomStartMaxPercent.clamp(0, 100) / 100
+        : widget.startAtPercent;
+    final percentTicket = _castStartPercentGate.prepare(
+      contentId: request.url,
+      previousMediaSessionId: _castService.snapshot.mediaSessionId,
+      startAtPercent: desiredStart,
+    );
     try {
       final committed = await _loadCastReplacement(
         request,
         failureCode: 'CAST_SOURCE_SWITCH_FAILED',
         failureMessage: 'Debrify TV could not switch this Cast channel.',
+        pendingStartGeneration: percentTicket,
       );
-      if (!committed || !mounted) return false;
+      if (!committed || !mounted) {
+        _castStartPercentGate.cancel();
+        return false;
+      }
+      _castStartPercentGate.confirm(percentTicket);
+      _maybeApplyCastPendingStart(_castService.snapshot);
+      _stopCastTrackingForNavigation();
 
       final channelName = payload['channelName']?.toString();
       final channelId = payload['channelId']?.toString();
@@ -10908,11 +10940,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         if (title.isNotEmpty) _dynamicTitle = title;
         _currentStreamUrl = url;
         _activeHttpHeaders = payloadHeaders;
-        _castPendingStartPercent = widget.startFromRandom
-            ? (_random.nextDouble() *
-                  widget.randomStartMaxPercent.clamp(0, 100) /
-                  100)
-            : widget.startAtPercent;
       });
       _raiseDebrifyBanner();
       _castExtraSubtitle = null;
@@ -10924,7 +10951,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       _syncCastTrackingState(_castService.snapshot, force: true);
       return true;
     } finally {
-      if (ownsSwitchGate) _castSourceSwitchInProgress = false;
+      _castSourceSwitchInProgress = false;
       if (_castRemoteActive) {
         _syncCastTrackingState(_castService.snapshot);
       }
@@ -10938,6 +10965,32 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final request = widget.requestChannelById;
     if (request == null) {
       debugPrint('Player: requestChannelById not provided');
+      return;
+    }
+
+    // Cast owns the stream: provider lookup must not pause media_kit.
+    if (!_playbackOwnership.isLocal) {
+      if (!_castRemoteActive || !_castService.connected) return;
+      final generation = ++_castNavigationGeneration;
+      if (mounted) setState(() => _isTransitioning = true);
+      try {
+        final castPayload = await request(channel.id);
+        if (!mounted || generation != _castNavigationGeneration ||
+            !_castRemoteActive) return;
+        if (castPayload == null) {
+          _showCastFailure(const CastException(
+            'CAST_SOURCE_SWITCH_FAILED', 'Cast channel provider returned no channel.'));
+          return;
+        }
+        await _switchCastDebrifyChannelPayload(castPayload);
+      } catch (_) {
+        _showCastFailure(const CastException(
+          'CAST_SOURCE_SWITCH_FAILED', 'Cast channel provider failed.'));
+      } finally {
+        if (mounted && generation == _castNavigationGeneration) {
+          setState(() => _isTransitioning = false);
+        }
+      }
       return;
     }
 
@@ -11071,6 +11124,32 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   Future<void> _goToNextChannel() async {
     final request = widget.requestNextChannel;
     if (request == null) {
+      return;
+    }
+
+    // Cast owns the stream: provider lookup must not pause media_kit.
+    if (!_playbackOwnership.isLocal) {
+      if (!_castRemoteActive || !_castService.connected) return;
+      final generation = ++_castNavigationGeneration;
+      if (mounted) setState(() => _isTransitioning = true);
+      try {
+        final castPayload = await request();
+        if (!mounted || generation != _castNavigationGeneration ||
+            !_castRemoteActive) return;
+        if (castPayload == null) {
+          _showCastFailure(const CastException(
+            'CAST_SOURCE_SWITCH_FAILED', 'Cast channel provider returned no channel.'));
+          return;
+        }
+        await _switchCastDebrifyChannelPayload(castPayload);
+      } catch (_) {
+        _showCastFailure(const CastException(
+          'CAST_SOURCE_SWITCH_FAILED', 'Cast channel provider failed.'));
+      } finally {
+        if (mounted && generation == _castNavigationGeneration) {
+          setState(() => _isTransitioning = false);
+        }
+      }
       return;
     }
 
@@ -14667,7 +14746,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     bool showFailure = true,
     bool resetTrackingState = true,
     bool rollbackOnFailure = true,
+    int? pendingStartGeneration,
   }) async {
+    if (pendingStartGeneration == null) _castStartPercentGate.cancel();
     if (!_castRemoteActive || !_castService.connected) return false;
     final previous = _activeCastRequest;
     final transaction = previous == null
@@ -14689,6 +14770,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       unawaited(_applyCastLanguagePolicy());
       return true;
     } on CastException {
+      _castStartPercentGate.cancel();
       if (rollbackOnFailure && previous != null && _castService.connected) {
         try {
           final rollback = transaction!.rollback().copyWith(
@@ -15070,9 +15152,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     }
   }
 
+  void _maybeApplyCastPendingStart(CastSnapshot snapshot) {
+    if (!_castRemoteActive || !_playbackOwnership.isCast) return;
+    final target = _castStartPercentGate.claim(
+      contentId: snapshot.mediaContentId,
+      mediaSessionId: snapshot.mediaSessionId,
+      duration: snapshot.duration,
+    );
+    if (target == null) return;
+    unawaited(_castService.seek(target).then<void>((_) {}).catchError(
+      (Object error) {
+        if (error is CastException) _showCastFailure(error);
+      },
+    ));
+  }
+
   void _onCastServiceChanged() {
     if (!mounted) return;
     final snapshot = _castService.snapshot;
+    if (!snapshot.connected) _castStartPercentGate.cancel();
 
     if (_pendingCastRequest != null &&
         snapshot.connected &&
@@ -15097,21 +15195,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       if (duration != null && duration > Duration.zero) {
         _duration = duration;
         _playbackUiClock.updateDuration(duration);
-        final pendingStart = _castPendingStartPercent;
-        if (pendingStart != null) {
-          _castPendingStartPercent = null;
-          final fraction = pendingStart.clamp(0.0, 1.0);
-          final target = Duration(
-            milliseconds: (duration.inMilliseconds * fraction).round(),
-          );
-          unawaited(
-            _castService.seek(target).then<void>((_) {}).catchError(
-              (Object error) {
-                if (error is CastException) _showCastFailure(error);
-              },
-            ),
-          );
-        }
+        _maybeApplyCastPendingStart(snapshot);
       }
 
       final isNewEnded =
@@ -15140,6 +15224,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   Future<void> _restoreLocalAfterCast(CastSnapshot snapshot) async {
     if (!mounted || _castRestoreInFlight) return;
+    _castStartPercentGate.cancel();
     _castRestoreInFlight = true;
     final target =
         snapshot.resumePosition ?? snapshot.position ?? _position;
@@ -15218,6 +15303,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   void _seekUserPlayback(Duration target) {
     if (_castRemoteActive) {
+      _castStartPercentGate.cancel();
       unawaited(
         _castService.seek(target).then<void>((_) {}).catchError((Object error) {
           if (error is CastException) _showCastFailure(error);

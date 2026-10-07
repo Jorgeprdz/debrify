@@ -574,6 +574,9 @@ class DebrifyCastManager(
         "selectedAudioTrack" to selectedTrackId(MediaTrack.TYPE_AUDIO),
         "selectedSubtitleTrack" to selectedTrackId(MediaTrack.TYPE_TEXT),
         "endedSequence" to endedSequence,
+        // Load identity is transient: never log or store signed content IDs.
+        "mediaContentId" to remoteMediaClient?.mediaInfo?.contentId,
+        "mediaSessionId" to remoteMediaClient?.mediaStatus?.mediaSessionId,
     )
 
     private fun emitSnapshot() {

@@ -27,6 +27,73 @@ CastRemoteTrack subtitle(
 );
 
 void main() {
+  group('Cast startAtPercent regression', () {
+    const oldUrl = 'https://example.test/old.mp4';
+    const nextUrl = 'https://example.test/new.mp4';
+    test('old duration and media session never trigger a seek', () {
+      final gate = CastStartPercentGate();
+      final ticket = gate.prepare(contentId: nextUrl,
+          previousMediaSessionId: 20, startAtPercent: 0.5);
+      expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
+          duration: const Duration(seconds: 100)), isNull);
+      gate.confirm(ticket);
+      expect(gate.claim(contentId: oldUrl, mediaSessionId: 20,
+          duration: const Duration(seconds: 100)), isNull);
+      expect(gate.claim(contentId: nextUrl, mediaSessionId: 20,
+          duration: const Duration(seconds: 100)), isNull);
+      expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
+          duration: const Duration(seconds: 100)), const Duration(seconds: 50));
+      expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
+          duration: const Duration(seconds: 100)), isNull);
+    });
+    test('rapid zap, manual seek, disconnect invalidate old intent', () {
+      final gate = CastStartPercentGate();
+      final oldTicket = gate.prepare(contentId: oldUrl,
+          previousMediaSessionId: 20, startAtPercent: 0.2);
+      final newTicket = gate.prepare(contentId: nextUrl,
+          previousMediaSessionId: 20, startAtPercent: 0.8);
+      expect(gate.isCurrent(oldTicket), isFalse);
+      gate.confirm(oldTicket);
+      gate.confirm(newTicket);
+      gate.cancel();
+      expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
+          duration: const Duration(seconds: 100)), isNull);
+    });
+    test('unknown identity, null/zero start fail closed; 1 clamps', () {
+      final gate = CastStartPercentGate();
+      for (final percent in <double?>[null, 0, -1, double.nan]) {
+        final ticket = gate.prepare(contentId: nextUrl,
+            previousMediaSessionId: 20, startAtPercent: percent);
+        gate.confirm(ticket);
+        expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
+            duration: const Duration(seconds: 100)), isNull);
+      }
+      final ticket = gate.prepare(contentId: nextUrl,
+          previousMediaSessionId: 20, startAtPercent: 1.5);
+      gate.confirm(ticket);
+      expect(gate.claim(contentId: nextUrl, mediaSessionId: 21,
+          duration: const Duration(seconds: 100)), const Duration(seconds: 100));
+      final missingIdentity = gate.prepare(contentId: nextUrl,
+          previousMediaSessionId: null, startAtPercent: 0.5);
+      gate.confirm(missingIdentity);
+      expect(gate.claim(contentId: nextUrl, mediaSessionId: 99,
+          duration: const Duration(seconds: 100)), isNull);
+    });
+  });
+  group('Stremio TV next recovery regression', () {
+    test('Cast and transferring owners cannot resume local media_kit', () {
+      for (final owner in <PlaybackOwner>[
+        PlaybackOwner.cast, PlaybackOwner.transferringToCast,
+        PlaybackOwner.transferringToLocal,
+      ]) {
+        expect(StremioTvNextRecovery.canResumeLocal(owner, true), isFalse);
+      }
+    });
+    test('LOCAL failure preserves prior resume behavior', () {
+      expect(StremioTvNextRecovery.canResumeLocal(PlaybackOwner.local, true), isTrue);
+      expect(StremioTvNextRecovery.canResumeLocal(PlaybackOwner.local, false), isFalse);
+    });
+  });
   group('Cast audio language policy', () {
     final tracks = <CastRemoteTrack>[
       audio('11', 'es-MX'),

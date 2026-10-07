@@ -40,6 +40,8 @@ class CastSnapshot {
   final String? selectedAudioTrack;
   final String? selectedSubtitleTrack;
   final int endedSequence;
+  final String? mediaContentId;
+  final int? mediaSessionId;
 
   const CastSnapshot({
     this.available = false,
@@ -56,6 +58,8 @@ class CastSnapshot {
     this.selectedAudioTrack,
     this.selectedSubtitleTrack,
     this.endedSequence = 0,
+    this.mediaContentId,
+    this.mediaSessionId,
   });
 
   factory CastSnapshot.fromMap(Map<Object?, Object?> raw) {
@@ -104,6 +108,8 @@ class CastSnapshot {
       selectedAudioTrack: stringValue(raw['selectedAudioTrack']),
       selectedSubtitleTrack: stringValue(raw['selectedSubtitleTrack']),
       endedSequence: (raw['endedSequence'] as num?)?.toInt() ?? 0,
+      mediaContentId: stringValue(raw['mediaContentId']),
+      mediaSessionId: (raw['mediaSessionId'] as num?)?.toInt(),
     );
   }
 }
@@ -343,6 +349,8 @@ class CastService extends ChangeNotifier {
             selectedAudioTrack: _snapshot.selectedAudioTrack,
             selectedSubtitleTrack: _snapshot.selectedSubtitleTrack,
             endedSequence: _snapshot.endedSequence,
+            mediaContentId: _snapshot.mediaContentId,
+            mediaSessionId: _snapshot.mediaSessionId,
             errorCode: error is PlatformException
                 ? error.code
                 : 'CAST_EVENT_ERROR',
