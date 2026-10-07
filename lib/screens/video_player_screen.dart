@@ -6248,6 +6248,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       rollbackOnFailure: !autoAdvance,
     );
     if (!committed || !mounted) return false;
+    if (!autoAdvance) _stopCastTrackingForNavigation();
 
     setState(() {
       _currentIndex = index;
@@ -6363,6 +6364,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       rollbackOnFailure: !autoAdvance,
     );
     if (!committed || !mounted) return false;
+    if (!autoAdvance) _stopCastTrackingForNavigation();
 
     setState(() {
       _activePlaylist = resolved.playlist;
@@ -6392,6 +6394,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }) async {
     final fetcher = widget.seriesSourceFetcher;
     if (fetcher == null) return false;
+    final generation = _castNavigationGeneration;
+    bool stillCurrent() => mounted && _castRemoteActive &&
+        _castService.connected && generation == _castNavigationGeneration;
     final current = _traktSeasonEpisode();
     if (current.season == null || current.episode == null) return false;
 
@@ -6414,7 +6419,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       );
       if (episode != null) next = (episode.season, episode.episode);
     }
-    if (next == null || !mounted) return false;
+    if (next == null || !stillCurrent()) return false;
 
     final season = next.$1;
     final episode = next.$2;
@@ -6422,6 +6427,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     Future<bool> trySources(List<Torrent> sources) async {
       for (var i = 0; i < sources.length; i++) {
+        if (!stillCurrent()) return false;
         final source = sources[i];
         if (!SeriesSourceFetcher.visibleForEpisode(source, season, episode) ||
             source.streamType == StreamType.externalUrl) {
@@ -6434,7 +6440,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
           season,
           episode,
         );
-        if (resolved == null || !mounted) continue;
+        if (!stillCurrent()) return false;
+        if (resolved == null) continue;
         final sourceIndex = sources.indexWhere(
           (candidate) =>
               SeriesSourceFetcher.sourceKey(candidate) == key,
@@ -6466,7 +6473,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     } catch (_) {
       episodes = null;
     }
-    if (!mounted) return false;
+    if (!stillCurrent()) return false;
     if (episodes != null && episodes.isNotEmpty) {
       final merged = SeriesSourceFetcher.mergeSources(existing, episodes);
       setState(() => _augmentedSources = merged);
@@ -6483,7 +6490,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     } catch (_) {
       packs = null;
     }
-    if (!mounted) return false;
+    if (!stillCurrent()) return false;
     if (packs != null && packs.isNotEmpty) {
       final base = _effectiveSources ?? existing;
       final merged = SeriesSourceFetcher.mergeSources(base, packs);
@@ -6499,10 +6506,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _castAdvanceInProgress = true;
     final generation = ++_castNavigationGeneration;
     try {
-      if (!autoAdvance) {
-        _stopCastTrackingForNavigation();
-      }
-
+      // Never stop current scrobbling just for ATTEMPTING a next request.
+      // A rejected load must not briefly stop/restart the previous content.
       final nextIndex = _findNextEpisodeIndex();
       if (nextIndex != -1 && _activePlaylist != null) {
         final entry = _activePlaylist![nextIndex];
@@ -6536,8 +6541,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       }
 
       if (await _resolveAndCastAdjacentEpisode(autoAdvance: autoAdvance)) {
-        return true;
+        return mounted && generation == _castNavigationGeneration;
       }
+      if (!mounted || generation != _castNavigationGeneration) return false;
 
       if (widget.requestMagicNext != null) {
         try {
@@ -6564,7 +6570,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                   showFailure: false,
                   rollbackOnFailure: !autoAdvance,
                 )) {
-              if (!mounted) return false;
+              if (!mounted || generation != _castNavigationGeneration) return false;
+              if (!autoAdvance) _stopCastTrackingForNavigation();
               setState(() {
                 _currentStreamUrl = url;
                 if (title.isNotEmpty) _dynamicTitle = title;
@@ -10561,7 +10568,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       season: contentSeason,
       episode: contentEpisode,
       headers: source?.httpHeaders,
-      autoplay: true,
+      autoplay: _castService.state != CastPlaybackState.paused,
     );
     if (request == null) {
       _showCastFailure(
@@ -10749,6 +10756,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     });
   }
 
+  /// True means a new slot was committed, or LOCAL playback was resumed
+  /// after a failed request (request handled; no further local fallback).
+  /// Under CAST, true only means confirmed new remote content.
   Future<bool> _goToNextStremioTvSlot({
     bool resumeCurrentOnFailure = true,
   }) async {
@@ -10884,7 +10894,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       season: parsed.season,
       episode: parsed.episode,
       headers: payloadHeaders,
-      autoplay: true,
+      autoplay: _castService.state != CastPlaybackState.paused,
     );
     if (request == null) {
       _showCastFailure(
