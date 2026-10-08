@@ -12,6 +12,26 @@ void main() {
       expect(snap.mediaSessionId, 42);
       expect(snap.duration, const Duration(seconds: 75));
     });
+    test('parses native session epoch and snapshot revision', () {
+      final snap = CastService.parseSnapshot(<Object?, Object?>{
+        'connected': true,
+        'mediaContentId': 'https://media.example.test/episode.m3u8',
+        'mediaSessionId': 17,
+        'sessionEpoch': 'bridge-a:3',
+        'snapshotRevision': 42,
+      });
+      expect(snap.sessionEpoch, 'bridge-a:3');
+      expect(snap.snapshotRevision, 42);
+      expect(snap.mediaSessionId, 17);
+    });
+
+    test('legacy Phase 1 snapshot omits native session identity safely', () {
+      final snap = CastService.parseSnapshot(<Object?, Object?>{
+        'mediaSessionId': 3,
+      });
+      expect(snap.sessionEpoch, isNull);
+      expect(snap.snapshotRevision, 0);
+    });
     test('does not invent missing media identity', () {
       final snap = CastService.parseSnapshot(<Object?, Object?>{
         'durationMs': 75000,

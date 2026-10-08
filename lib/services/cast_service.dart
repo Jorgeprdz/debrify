@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'cast_phase2_policy.dart';
+import 'cast_load_coordinator.dart';
 
 enum CastPlaybackState {
   disconnected,
@@ -42,6 +43,10 @@ class CastSnapshot {
   final int endedSequence;
   final String? mediaContentId;
   final int? mediaSessionId;
+  final String? sessionEpoch;
+  final String? bridgeInstanceId;
+  final bool receiverOperationBlocked;
+  final int snapshotRevision;
 
   const CastSnapshot({
     this.available = false,
@@ -60,6 +65,10 @@ class CastSnapshot {
     this.endedSequence = 0,
     this.mediaContentId,
     this.mediaSessionId,
+    this.sessionEpoch,
+    this.bridgeInstanceId,
+    this.receiverOperationBlocked = false,
+    this.snapshotRevision = 0,
   });
 
   factory CastSnapshot.fromMap(Map<Object?, Object?> raw) {
@@ -110,6 +119,10 @@ class CastSnapshot {
       endedSequence: (raw['endedSequence'] as num?)?.toInt() ?? 0,
       mediaContentId: stringValue(raw['mediaContentId']),
       mediaSessionId: (raw['mediaSessionId'] as num?)?.toInt(),
+      sessionEpoch: stringValue(raw['sessionEpoch']),
+      bridgeInstanceId: stringValue(raw['bridgeInstanceId']),
+      receiverOperationBlocked: raw['receiverOperationBlocked'] == true,
+      snapshotRevision: (raw['snapshotRevision'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -276,18 +289,60 @@ class CastException implements Exception {
   String toString() => 'CastException($code): $message';
 }
 
+/// The platform boundary is injectable; receiver authority stays in CastService.
+abstract interface class CastTransport {
+  Stream<Object?> get events;
+  Future<Object?> invoke(String method, [Map<String, Object?>? arguments]);
+}
+
+class _ChannelCastTransport implements CastTransport {
+  static const _method = MethodChannel('com.debrify.app/cast');
+  static const _events = EventChannel('com.debrify.app/cast_events');
+
+  @override
+  Stream<Object?> get events => _events.receiveBroadcastStream();
+
+  @override
+  Future<Object?> invoke(String method, [Map<String, Object?>? arguments]) =>
+      _method.invokeMethod<Object?>(method, arguments);
+}
+
 class CastService extends ChangeNotifier {
-  CastService._();
+  CastService({
+    CastTransport? transport,
+    bool? isAndroid,
+    Duration callerTimeout = const Duration(seconds: 30),
+  }) : _transport = transport ?? _ChannelCastTransport(),
+       _isAndroid = isAndroid ?? Platform.isAndroid,
+       _navigationLoads = CastLoadCoordinator<CastSnapshot>(callerTimeout: callerTimeout) {
+    _navigationLoads.onPhysicalStateChanged = () {
+      if (!_disposed) notifyListeners();
+    };
+  }
 
-  static final CastService instance = CastService._();
-
-  static const MethodChannel _method = MethodChannel('com.debrify.app/cast');
-  static const EventChannel _events = EventChannel(
-    'com.debrify.app/cast_events',
-  );
-
+  static final CastService instance = CastService();
+  final CastTransport _transport;
+  final bool _isAndroid;
+  final CastLoadCoordinator<CastSnapshot> _navigationLoads;
   CastSnapshot _snapshot = const CastSnapshot();
-  StreamSubscription<dynamic>? _eventSubscription;
+  // Wire reality and the accepted tracking clock have separate authority.
+  CastSnapshot _receiverSnapshot = const CastSnapshot();
+  String? _acceptedContentId;
+  int? _acceptedMediaSessionId;
+  String? _acceptedSessionEpoch;
+  final Set<String> _retiredSessionEpochs = <String>{};
+  final Set<String> _retiredBridges = <String>{};
+  final Map<String, int> _bridgeRevisions = <String, int>{};
+  String? _currentBridge;
+  String? _wireSessionEpoch;
+  bool _receiverRecoveryRequired = false;
+  bool _controlSnapshotsQuarantined = false;
+  ({int generation, String? epoch, String? bridge})? _pendingStopAuthority;
+  final Map<Object, ({String? epoch, bool Function() permitted})>
+      _physicalControlAuthorities = <Object, ({String? epoch, bool Function() permitted})>{};
+  bool _disposed = false;
+  bool get receiverRecoveryRequired => _receiverRecoveryRequired;
+  StreamSubscription<Object?>? _eventSubscription;
   bool _initialized = false;
   Future<void>? _initializing;
   String? sessionAudioLanguage;
@@ -310,7 +365,7 @@ class CastService extends ChangeNotifier {
   int get endedSequence => _snapshot.endedSequence;
 
   Future<void> initialize() {
-    if (_initialized || !Platform.isAndroid) {
+    if (_disposed || _initialized || !_isAndroid) {
       _initialized = true;
       return Future<void>.value();
     }
@@ -325,56 +380,36 @@ class CastService extends ChangeNotifier {
   }
 
   Future<void> _initializeAndroid() async {
-    _eventSubscription ??= _events.receiveBroadcastStream().listen(
-      (dynamic event) {
-        if (event is Map) {
-          _applySnapshot(
-            CastSnapshot.fromMap(Map<Object?, Object?>.from(event)),
-          );
-        }
+    _eventSubscription ??= _transport.events.listen(
+      (event) {
+        if (event is Map) _applySnapshot(CastSnapshot.fromMap(Map<Object?, Object?>.from(event)));
       },
       onError: (Object error) {
-        _applySnapshot(
-          CastSnapshot(
-            available: _snapshot.available,
-            connected: _snapshot.connected,
-            state: CastPlaybackState.error,
-            deviceName: _snapshot.deviceName,
-            position: _snapshot.position,
-            duration: _snapshot.duration,
-            resumePosition: _snapshot.resumePosition,
-            resumeShouldPlay: _snapshot.resumeShouldPlay,
-            availableAudioTracks: _snapshot.availableAudioTracks,
-            availableSubtitleTracks: _snapshot.availableSubtitleTracks,
-            selectedAudioTrack: _snapshot.selectedAudioTrack,
-            selectedSubtitleTrack: _snapshot.selectedSubtitleTrack,
-            endedSequence: _snapshot.endedSequence,
-            mediaContentId: _snapshot.mediaContentId,
-            mediaSessionId: _snapshot.mediaSessionId,
-            errorCode: error is PlatformException
-                ? error.code
-                : 'CAST_EVENT_ERROR',
-          ),
-        );
+        if (_disposed) return;
+        // Stream errors are local observations, not receiver-session retirement.
+        _snapshot = _copySnapshot(_snapshot,
+          state: CastPlaybackState.error,
+          errorCode: error is PlatformException ? error.code : 'CAST_EVENT_ERROR');
+        notifyListeners();
       },
     );
-
     try {
-      final state = await _method.invokeMapMethod<Object?, Object?>('getState');
-      if (state != null) {
-        _applySnapshot(CastSnapshot.fromMap(state));
+      final raw = await _transport.invoke('getState');
+      if (raw is Map) {
+        _applySnapshot(CastSnapshot.fromMap(Map<Object?, Object?>.from(raw)));
       } else {
-        final available =
-            await _method.invokeMethod<bool>('isCastAvailable') ?? false;
-        _applySnapshot(CastSnapshot(available: available));
+        final available = await _transport.invoke('isCastAvailable') == true;
+        if (!_disposed) {
+          _snapshot = CastSnapshot(available: available);
+          notifyListeners();
+        }
       }
     } on PlatformException catch (error) {
-      _applySnapshot(
-        CastSnapshot(
-          state: CastPlaybackState.error,
-          errorCode: error.code,
-        ),
-      );
+      if (!_disposed) {
+        _snapshot = _copySnapshot(_snapshot, state: CastPlaybackState.error,
+          errorCode: error.code);
+        notifyListeners();
+      }
     } finally {
       _initialized = true;
     }
@@ -382,29 +417,182 @@ class CastService extends ChangeNotifier {
 
   Future<bool> connect() async {
     await initialize();
-    if (!Platform.isAndroid) return false;
+    if (_disposed || !_isAndroid) return false;
     try {
-      return await _method.invokeMethod<bool>('openCastDialog') ?? false;
+      return await _transport.invoke('openCastDialog') == true;
     } on PlatformException catch (error) {
       throw CastException.fromPlatform(error);
     }
   }
 
-  Future<CastSnapshot> load(CastMediaRequest request) async {
+  /// Claim authority at user-intent entry, before any asynchronous provider.
+  int beginNavigationIntent() {
+    final ticket = _navigationLoads.beginIntent();
+    if (_hasCurrentPhysicalControl) _quarantineControlSnapshots();
+    return ticket;
+  }
+  bool isCurrentLoad(int generation) => _navigationLoads.isCurrent(generation);
+  bool get hasLoadInFlight => _navigationLoads.hasInFlight ||
+      _receiverSnapshot.receiverOperationBlocked;
+  bool get receiverOperationBlocked => _navigationLoads.isBlockedOnReceiver ||
+      _receiverSnapshot.receiverOperationBlocked ||
+      (!_receiverSnapshot.connected && _receiverSnapshot.sessionEpoch != null);
+  bool get receiverLoadBlocked => receiverOperationBlocked;
+
+  void cancelNavigationLoads() {
+    _navigationLoads.invalidate();
+    if (_hasCurrentPhysicalControl) _quarantineControlSnapshots();
+  }
+
+  /// LOAD ACK confirms receiver acceptance/identity, NOT decoding/playback.
+  /// No raw native LOAD result is applied to UI before authoritative commit.
+  Future<CastLoadResult<CastSnapshot>> coordinatedLoad(
+    CastMediaRequest request, {
+    required int generation,
+    required bool Function() permitted,
+  }) async {
     await initialize();
+    final expectedEpoch = _receiverSnapshot.sessionEpoch;
+    final result = await _navigationLoads.submit(
+      generation: generation,
+      load: () => _loadNative(request, expectedEpoch: expectedEpoch),
+      permitted: () => !_disposed && _receiverSnapshot.connected &&
+          expectedEpoch != null && _receiverSnapshot.sessionEpoch == expectedEpoch &&
+          !_receiverSnapshot.receiverOperationBlocked && permitted(),
+      verify: (ack) => _loadAckMatches(ack, request.url, expectedEpoch) &&
+          !_receiverRecoveryRequiredForAck(ack),
+      onPhysicalResult: (ack, observedGeneration, logicalPending) {
+        if (_disposed || _isRetiredSnapshot(ack) ||
+            ack.bridgeInstanceId != _currentBridge || ack.sessionEpoch != expectedEpoch ||
+            _receiverSnapshot.sessionEpoch != expectedEpoch) return;
+        final uncommitted = !logicalPending || !isCurrentLoad(observedGeneration) ||
+            !permitted() || ack.mediaContentId != request.url ||
+            ack.mediaSessionId == null || ack.mediaSessionId! <= 0;
+        // Capture physical reality even if this is the first delivered unblock
+        // snapshot. A current ticket may have already logically timed out.
+        _applySnapshot(ack, uncommittedPhysicalLoad: uncommitted);
+        if (uncommitted) _markRecoveryIfDivergent(includeUnadopted: true);
+      },
+    );
+    if (result.committed && isCurrentLoad(generation) &&
+        permitted() && result.value != null && !_disposed) {
+      final ack = result.value!;
+      if (!_loadAckMatches(ack, request.url, expectedEpoch) ||
+          _receiverRecoveryRequiredForAck(ack)) {
+        _markRecoveryIfDivergent();
+        return CastLoadResult<CastSnapshot>(CastLoadOutcome.rejected, generation,
+          value: ack);
+      }
+      _acceptedContentId = request.url;
+      _acceptedMediaSessionId = ack.mediaSessionId;
+      _acceptedSessionEpoch = ack.sessionEpoch;
+      _receiverRecoveryRequired = false;
+      _controlSnapshotsQuarantined = false;
+      _applySnapshot(ack, authoritativeLoad: true);
+      return CastLoadResult<CastSnapshot>(CastLoadOutcome.committed, generation, value: _snapshot);
+    } else if (result.committed) {
+      _markRecoveryIfDivergent(includeUnadopted: true);
+      return CastLoadResult<CastSnapshot>(isCurrentLoad(generation)
+        ? CastLoadOutcome.cancelled : CastLoadOutcome.superseded, generation);
+    } else {
+      _markRecoveryIfDivergent();
+    }
+    return result;
+  }
+
+  bool _loadAckMatches(CastSnapshot ack, String contentId, String? epoch) =>
+      !_disposed && ack.connected && epoch != null && ack.sessionEpoch == epoch &&
+      ack.mediaContentId == contentId && ack.mediaSessionId != null &&
+      ack.mediaSessionId! > 0 && !_isRetiredSnapshot(ack) &&
+      ack.bridgeInstanceId == _currentBridge &&
+      _receiverSnapshot.connected && _receiverSnapshot.sessionEpoch == epoch;
+
+  bool _receiverRecoveryRequiredForAck(CastSnapshot ack) {
+    final latest = _receiverSnapshot;
+    // A newer matching provisional event can be adopted when its earlier ACK
+    // arrives. A newer divergent receiver identity cannot be overridden by ACK.
+    return latest.bridgeInstanceId == ack.bridgeInstanceId &&
+        latest.snapshotRevision > ack.snapshotRevision &&
+        (latest.mediaContentId != ack.mediaContentId ||
+         latest.mediaSessionId != ack.mediaSessionId ||
+         latest.sessionEpoch != ack.sessionEpoch);
+  }
+
+  /// Session adoption never sends LOAD. The caller must first refresh from
+  /// the native receiver and match the exact current screen request.
+  bool adoptVerifiedReceiverIdentity({
+    required CastSnapshot fresh,
+    required String expectedContentId,
+    required int generation,
+  }) {
+    if (hasLoadInFlight || !isCurrentLoad(generation) ||
+        !fresh.connected || fresh.sessionEpoch == null ||
+        fresh.mediaSessionId == null || fresh.mediaSessionId! <= 0 ||
+        fresh.mediaContentId != expectedContentId ||
+        _isRetiredSnapshot(fresh) ||
+        fresh.bridgeInstanceId != _receiverSnapshot.bridgeInstanceId ||
+        fresh.snapshotRevision != _receiverSnapshot.snapshotRevision ||
+        _receiverSnapshot.sessionEpoch != fresh.sessionEpoch ||
+        _receiverSnapshot.mediaContentId != fresh.mediaContentId ||
+        _receiverSnapshot.mediaSessionId != fresh.mediaSessionId) return false;
+    _acceptedContentId = fresh.mediaContentId;
+    _acceptedMediaSessionId = fresh.mediaSessionId;
+    _acceptedSessionEpoch = fresh.sessionEpoch;
+    _receiverRecoveryRequired = false;
+    _controlSnapshotsQuarantined = false;
+    _snapshot = fresh;
+    notifyListeners();
+    return true;
+  }
+
+  /// Phase 1 public API remains available but can no longer bypass the
+  /// Phase 2 physical LOAD coordinator.
+  Future<CastSnapshot> load(CastMediaRequest request) async {
+    final generation = beginNavigationIntent();
+    await initialize();
+    _validateMediaRequest(request);
+    if (!_isAndroid) return _snapshot;
+    final outcome = await coordinatedLoad(
+      request, generation: generation, permitted: () => true,
+    );
+    if (outcome.committed && outcome.value != null) return outcome.value!;
+    final error = outcome.error;
+    if (error is CastException) throw error;
+    throw const CastException(
+      'CAST_LOAD_FAILED', 'The requested Cast LOAD did not commit.',
+    );
+  }
+
+  /// Only the serialized coordinator may invoke the platform LOAD channel.
+  Future<CastSnapshot> _loadNative(CastMediaRequest request, {
+    required String? expectedEpoch,
+  }) async {
+    // coordinatedLoad initialized before claiming physical exclusion. No
+    // await may split its pre-dispatch ownership check from channel dispatch.
+    _validateMediaRequest(request);
+    try {
+      final raw = await _transport.invoke('loadMedia', <String, Object?>{
+        ...request.toMap(),
+        'expectedSessionEpoch': expectedEpoch,
+      });
+      if (raw is! Map) {
+        throw const CastException('CAST_LOAD_FAILED', 'Receiver returned no LOAD identity.');
+      }
+      return CastSnapshot.fromMap(Map<Object?, Object?>.from(raw));
+    } on PlatformException catch (error) {
+      throw CastException.fromPlatform(error);
+    }
+  }
+
+  void _validateMediaRequest(CastMediaRequest request) {
     if (!request.isDirectHttpUrl) {
-      throw const CastException(
-        'CAST_INVALID_URL',
-        'Google Cast requires a direct HTTP or HTTPS media URL.',
-      );
+      throw const CastException('CAST_INVALID_URL',
+        'Google Cast requires a direct HTTP or HTTPS media URL.');
     }
     if (request.hasUnsupportedHeaders) {
-      throw const CastException(
-        'CAST_UNSUPPORTED_HEADERS',
-        'This stream requires HTTP headers that the Default Media Receiver cannot safely receive.',
-      );
+      throw const CastException('CAST_UNSUPPORTED_HEADERS',
+        'This stream requires HTTP headers that the Default Media Receiver cannot safely receive.');
     }
-    return _invokeSnapshot('loadMedia', request.toMap());
   }
 
   Future<CastSnapshot> play() => _invokeSnapshot('play');
@@ -421,6 +609,57 @@ class CastService extends ChangeNotifier {
       'seek',
       <String, Object?>{'positionMs': position.inMilliseconds},
     );
+  }
+
+  /// The native receiver validates the identity again just before dispatch.
+  /// An already dispatched physical seek cannot be cancelled by Dart.
+  Future<CastSnapshot?> seekForCommittedMedia(
+    Duration position, {
+    required int generation,
+    required String? contentId,
+    required int? mediaSessionId,
+    required bool Function() permitted,
+  }) async {
+    if (position.isNegative) {
+      throw const CastException('CAST_BAD_SEEK', 'Negative seek position.');
+    }
+    await initialize();
+    final epoch = _acceptedSessionEpoch;
+    bool validTarget() => !_disposed && connected && isCurrentLoad(generation) &&
+        permitted() && !_receiverRecoveryRequired &&
+        contentId != null && mediaSessionId != null && mediaSessionId > 0 &&
+        epoch != null && _acceptedContentId == contentId &&
+        _acceptedMediaSessionId == mediaSessionId && _acceptedSessionEpoch == epoch &&
+        _receiverMatchesAccepted();
+    if (!_isAndroid || !validTarget() || hasLoadInFlight) return null;
+    final reply = await _navigationLoads.dispatchControl<CastSnapshot?>(
+      generation: generation,
+      permitted: validTarget,
+      command: () => _runPhysicalControl(epoch: epoch, permitted: validTarget,
+        command: () async {
+        try {
+          final raw = await _transport.invoke('seek', <String, Object?>{
+            'positionMs': position.inMilliseconds,
+            'expectedContentId': contentId,
+            'expectedMediaSessionId': mediaSessionId,
+            'expectedSessionEpoch': epoch,
+          });
+          return raw is Map ? CastSnapshot.fromMap(Map<Object?, Object?>.from(raw)) : null;
+        } on PlatformException catch (error) {
+          if (error.code == 'CAST_STALE_COMMAND') return null;
+          throw CastException.fromPlatform(error);
+        }
+      }),
+    );
+    // No global mutation occurs inside the outstanding physical command.
+    if (reply == null || !validTarget() ||
+        reply.mediaContentId != contentId || reply.mediaSessionId != mediaSessionId ||
+        reply.sessionEpoch != epoch || _isRetiredSnapshot(reply)) {
+      if (_hasCurrentPhysicalControl) _quarantineControlSnapshots();
+      return null;
+    }
+    _applySnapshot(reply);
+    return _snapshot;
   }
 
   Future<CastSnapshot> stop() => _invokeSnapshot('stop');
@@ -488,9 +727,8 @@ class CastService extends ChangeNotifier {
   }
 
   Future<CastSnapshot> disconnect() async {
-    final snapshot = await _invokeSnapshot('disconnect');
-    clearSessionTrackIntent();
-    return snapshot;
+    cancelNavigationLoads();
+    return _invokeSnapshot('disconnect');
   }
 
   Future<CastSnapshot> refresh() => _invokeSnapshot('getState');
@@ -499,27 +737,320 @@ class CastService extends ChangeNotifier {
     String method, [
     Map<String, Object?>? arguments,
   ]) async {
+    final generation = _navigationLoads.generation;
     await initialize();
-    if (!Platform.isAndroid) return _snapshot;
-    try {
-      final raw = await _method.invokeMapMethod<Object?, Object?>(
-        method,
-        arguments,
-      );
-      if (raw != null) {
-        final next = CastSnapshot.fromMap(raw);
-        _applySnapshot(next);
-        return next;
+    if (_disposed) throw const CastException('CAST_DISPOSED', 'Cast service is disposed.');
+    if (!_isAndroid) return _snapshot;
+    Future<CastSnapshot?> invokeNativeSnapshot(Map<String, Object?>? args) async {
+      try {
+        final raw = await _transport.invoke(method, args);
+        return raw is Map ? CastSnapshot.fromMap(Map<Object?, Object?>.from(raw)) : null;
+      } on PlatformException catch (error) {
+        throw CastException.fromPlatform(error);
       }
+    }
+    if (method == 'getState' || method == 'disconnect') {
+      final next = await invokeNativeSnapshot(arguments);
+      if (next == null || !_applySnapshot(next)) return _receiverSnapshot;
+      // A refresh returns fresh receiver reality even while accepted UI is frozen.
+      return method == 'disconnect' || !next.connected ? _snapshot : next;
+    }
+    final epoch = _acceptedSessionEpoch;
+    final contentId = _acceptedContentId;
+    final mediaSessionId = _acceptedMediaSessionId;
+    final bridge = _receiverSnapshot.bridgeInstanceId;
+    bool permitted() => !_disposed && isCurrentLoad(generation) &&
+        !_receiverRecoveryRequired && epoch != null && contentId != null &&
+        mediaSessionId != null && _acceptedSessionEpoch == epoch &&
+        _acceptedContentId == contentId && _acceptedMediaSessionId == mediaSessionId &&
+        _receiverSnapshot.bridgeInstanceId == bridge &&
+        (_receiverMatchesAccepted() ||
+         (method == 'stop' && _currentStopMayUnload(_receiverSnapshot)));
+    if (!permitted() || !_receiverMatchesAccepted() || hasLoadInFlight) {
+      throw const CastException('CAST_COMMAND_SUPERSEDED',
+        'Command target is no longer the committed receiver media.');
+    }
+    if (method == 'stop') {
+      _pendingStopAuthority = (generation: generation, epoch: epoch, bridge: bridge);
+    }
+    try {
+      final controlled = await _navigationLoads.dispatchControl<CastSnapshot?>(
+        generation: generation,
+        permitted: permitted,
+        command: () => _runPhysicalControl(epoch: epoch, permitted: permitted,
+          command: () => invokeNativeSnapshot(<String, Object?>{
+            ...?arguments,
+            'expectedSessionEpoch': epoch,
+            'expectedContentId': contentId,
+            'expectedMediaSessionId': mediaSessionId,
+          })),
+      );
+      final identityMatches = controlled != null &&
+          controlled.mediaContentId == contentId && controlled.mediaSessionId == mediaSessionId;
+      final stopped = method == 'stop' && controlled != null &&
+          _currentStopMayUnload(controlled);
+      if (controlled == null || !permitted() || controlled.sessionEpoch != epoch ||
+          controlled.bridgeInstanceId != bridge ||
+          (!identityMatches && !stopped) || _isRetiredSnapshot(controlled)) {
+        if (epoch != null && _receiverSnapshot.sessionEpoch == epoch &&
+            _receiverSnapshot.bridgeInstanceId == bridge) {
+          _quarantineControlSnapshots();
+          if (controlled != null && !_isRetiredSnapshot(controlled) &&
+              controlled.sessionEpoch == epoch && controlled.bridgeInstanceId == bridge) {
+            _applySnapshot(controlled);
+          }
+        }
+        throw const CastException('CAST_COMMAND_SUPERSEDED',
+          'Command not committed after receiver ownership changed.');
+      }
+      if (method == 'stop') {
+        // Google Cast STOP unloads content and invalidates its media session.
+        // Only this still-owned exact-preflight transaction may accept unload.
+        _acceptedContentId = null;
+        _acceptedMediaSessionId = null;
+        _acceptedSessionEpoch = null;
+        _receiverRecoveryRequired = false;
+        _controlSnapshotsQuarantined = false;
+      }
+      _applySnapshot(controlled, authoritativeLoad: method == 'stop');
       return _snapshot;
-    } on PlatformException catch (error) {
-      throw CastException.fromPlatform(error);
+    } finally {
+      if (_pendingStopAuthority?.generation == generation) _pendingStopAuthority = null;
     }
   }
 
-  void _applySnapshot(CastSnapshot next) {
+  bool _isUnloadedSnapshot(CastSnapshot snapshot) => snapshot.connected &&
+      snapshot.state == CastPlaybackState.connected &&
+      (snapshot.mediaSessionId == null || snapshot.mediaSessionId! <= 0);
+
+  bool _currentStopMayUnload(CastSnapshot snapshot) {
+    final stop = _pendingStopAuthority;
+    return stop != null && isCurrentLoad(stop.generation) &&
+        !_controlSnapshotsQuarantined && snapshot.sessionEpoch == stop.epoch &&
+        snapshot.bridgeInstanceId == stop.bridge && _isUnloadedSnapshot(snapshot) &&
+        (snapshot.mediaContentId == null || snapshot.mediaContentId == _acceptedContentId);
+  }
+
+  Future<CastSnapshot?> _runPhysicalControl({
+    required String? epoch,
+    required bool Function() permitted,
+    required Future<CastSnapshot?> Function() command,
+  }) async {
+    final token = Object();
+    _physicalControlAuthorities[token] = (epoch: epoch, permitted: permitted);
+    try {
+      return await command();
+    } finally {
+      // MethodChannel and EventChannel can deliver the same old command in
+      // either order. Preserve quarantine after physical ACK until fresh proof
+      // explicitly restores receiver authority.
+      try {
+        if (!_disposed && epoch != null && _receiverSnapshot.sessionEpoch == epoch &&
+            (!_permissionHolds(permitted) || _navigationLoads.isBlockedOnReceiver)) {
+          _quarantineControlSnapshots();
+        }
+      } finally {
+        _physicalControlAuthorities.remove(token);
+      }
+    }
+  }
+
+  bool _permissionHolds(bool Function() permitted) {
+    try {
+      return permitted();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool get _hasCurrentPhysicalControl => _physicalControlAuthorities.values.any(
+      (authority) => authority.epoch == _receiverSnapshot.sessionEpoch);
+
+  void _quarantineControlSnapshots() {
+    if (_disposed || _receiverSnapshot.sessionEpoch == null) return;
+    final changed = !_controlSnapshotsQuarantined || !_receiverRecoveryRequired;
+    _controlSnapshotsQuarantined = true;
+    _receiverRecoveryRequired = true;
+    if (changed) notifyListeners();
+  }
+
+  bool _isRetiredSnapshot(CastSnapshot next) =>
+      (next.bridgeInstanceId != null && _retiredBridges.contains(next.bridgeInstanceId)) ||
+      (next.sessionEpoch != null && _retiredSessionEpochs.contains(next.sessionEpoch));
+
+  bool _receiverMatchesAccepted() => _receiverSnapshot.connected &&
+      _acceptedSessionEpoch != null && _acceptedContentId != null &&
+      _acceptedMediaSessionId != null &&
+      _receiverSnapshot.sessionEpoch == _acceptedSessionEpoch &&
+      _receiverSnapshot.mediaContentId == _acceptedContentId &&
+      _receiverSnapshot.mediaSessionId == _acceptedMediaSessionId;
+
+  void _markRecoveryIfDivergent({bool includeUnadopted = false}) {
+    if (_disposed || !_receiverSnapshot.connected ||
+        (_acceptedContentId == null && !includeUnadopted) ||
+        _receiverMatchesAccepted() || _receiverRecoveryRequired) return;
+    _receiverRecoveryRequired = true;
+    notifyListeners();
+  }
+
+  bool _applySnapshot(CastSnapshot next, {
+    bool authoritativeLoad = false,
+    bool uncommittedPhysicalLoad = false,
+  }) {
+    if (_disposed || _isRetiredSnapshot(next)) return false;
+    final bridge = next.bridgeInstanceId;
+    if (_currentBridge != null && bridge == null) return false;
+    if (bridge != null) {
+      final watermark = _bridgeRevisions[bridge] ?? -1;
+      if (next.snapshotRevision < watermark) {
+        if (!authoritativeLoad ||
+            next.sessionEpoch != _receiverSnapshot.sessionEpoch ||
+            next.mediaContentId != _receiverSnapshot.mediaContentId ||
+            next.mediaSessionId != _receiverSnapshot.mediaSessionId) return false;
+        next = _receiverSnapshot; // Newer provisional event, same accepted LOAD.
+      }
+      if (_currentBridge != bridge) {
+        if (_currentBridge != null) _retiredBridges.add(_currentBridge!);
+        _currentBridge = bridge;
+      }
+      _bridgeRevisions[bridge] = next.snapshotRevision;
+    }
+    final previousWire = _receiverSnapshot;
+    final hadAcceptedIdentity = _acceptedContentId != null;
+    final epochChanged = _wireSessionEpoch != next.sessionEpoch;
+    if (epochChanged) {
+      if (_wireSessionEpoch != null) _retiredSessionEpochs.add(_wireSessionEpoch!);
+      _wireSessionEpoch = next.sessionEpoch;
+      if (previousWire.connected || _acceptedSessionEpoch != null) {
+        cancelNavigationLoads();
+      }
+      _acceptedContentId = null;
+      _acceptedMediaSessionId = null;
+      _acceptedSessionEpoch = null;
+      _receiverRecoveryRequired = false;
+      _controlSnapshotsQuarantined = false;
+    }
+    _receiverSnapshot = next;
+    if (epochChanged && hadAcceptedIdentity && next.connected) {
+      _receiverRecoveryRequired = true;
+      _snapshot = _copySnapshot(next, preserveUnknownTimes: true,
+        position: _snapshot.position, duration: _snapshot.duration,
+        resumePosition: _snapshot.position ?? _snapshot.resumePosition,
+        resumeShouldPlay: _snapshot.state == CastPlaybackState.playing ? true :
+            _snapshot.state == CastPlaybackState.paused ? false : _snapshot.resumeShouldPlay);
+      notifyListeners();
+      return true;
+    }
+    if (!next.connected && next.sessionEpoch != null) {
+      // Suspension/unconfirmed loss is not SDK retirement. Retain the accepted
+      // identity and clock; no local ownership transfer is safe at this point.
+      if (previousWire.connected) cancelNavigationLoads();
+      _snapshot = _copySnapshot(next, state: CastPlaybackState.connecting,
+        preserveUnknownTimes: true,
+        position: _snapshot.position, duration: _snapshot.duration,
+        resumePosition: _snapshot.position ?? _snapshot.resumePosition,
+        resumeShouldPlay: _snapshot.state == CastPlaybackState.playing ? true :
+            _snapshot.state == CastPlaybackState.paused ? false : _snapshot.resumeShouldPlay,
+        mediaContentId: _snapshot.mediaContentId,
+        mediaSessionId: _snapshot.mediaSessionId,
+        receiverOperationBlocked: true);
+      notifyListeners();
+      return true;
+    }
+    if (!next.connected) {
+      final preserveAcceptedResume = hadAcceptedIdentity ||
+          ((previousWire.connected || previousWire.sessionEpoch != null) &&
+           _snapshot.mediaContentId != null);
+      if (previousWire.connected) cancelNavigationLoads();
+      if (preserveAcceptedResume) {
+        next = _copySnapshot(next, preserveUnknownTimes: true,
+          position: _snapshot.position,
+          duration: _snapshot.duration,
+          resumePosition: _snapshot.position ?? _snapshot.resumePosition,
+          resumeShouldPlay: _snapshot.state == CastPlaybackState.playing ? true :
+              _snapshot.state == CastPlaybackState.paused ? false : _snapshot.resumeShouldPlay);
+      }
+      _acceptedContentId = null;
+      _acceptedMediaSessionId = null;
+      _acceptedSessionEpoch = null;
+      _receiverRecoveryRequired = false;
+      _controlSnapshotsQuarantined = false;
+      clearSessionTrackIntent();
+    } else if (!authoritativeLoad) {
+      if (_physicalControlAuthorities.values.any((authority) =>
+          authority.epoch == next.sessionEpoch && !_permissionHolds(authority.permitted)) ||
+          (_hasCurrentPhysicalControl && _navigationLoads.isBlockedOnReceiver)) {
+        _quarantineControlSnapshots();
+      }
+      if (_controlSnapshotsQuarantined ||
+          (_receiverRecoveryRequired && _acceptedContentId == null)) {
+        notifyListeners();
+        return true;
+      }
+      if (uncommittedPhysicalLoad) {
+        _markRecoveryIfDivergent(includeUnadopted: true);
+      }
+      if (_acceptedContentId != null && !_receiverMatchesAccepted()) {
+        if (_currentStopMayUnload(next)) {
+          notifyListeners();
+          return true;
+        }
+        if (uncommittedPhysicalLoad || !_navigationLoads.hasInFlight) {
+          _markRecoveryIfDivergent();
+        }
+        notifyListeners();
+        return true; // Wire reality advances; the accepted clock stays frozen.
+      }
+      if (_acceptedContentId == null && _navigationLoads.hasInFlight &&
+          next.mediaContentId != null && !epochChanged) {
+        notifyListeners();
+        return true;
+      }
+    }
     _snapshot = next;
     notifyListeners();
+    return true;
+  }
+
+  CastSnapshot _copySnapshot(CastSnapshot source, {
+    CastPlaybackState? state,
+    Duration? position,
+    Duration? duration,
+    Duration? resumePosition,
+    bool? resumeShouldPlay,
+    String? errorCode,
+    String? mediaContentId,
+    int? mediaSessionId,
+    bool? receiverOperationBlocked,
+    bool preserveUnknownTimes = false,
+  }) => CastSnapshot(
+    available: source.available, connected: source.connected,
+    state: state ?? source.state, deviceName: source.deviceName,
+    position: preserveUnknownTimes ? position : position ?? source.position,
+    duration: preserveUnknownTimes ? duration : duration ?? source.duration,
+    resumePosition: preserveUnknownTimes ? resumePosition : resumePosition ?? source.resumePosition,
+    resumeShouldPlay: preserveUnknownTimes ? resumeShouldPlay : resumeShouldPlay ?? source.resumeShouldPlay,
+    errorCode: errorCode ?? source.errorCode,
+    availableAudioTracks: source.availableAudioTracks,
+    availableSubtitleTracks: source.availableSubtitleTracks,
+    selectedAudioTrack: source.selectedAudioTrack,
+    selectedSubtitleTrack: source.selectedSubtitleTrack,
+    endedSequence: source.endedSequence,
+    mediaContentId: mediaContentId ?? source.mediaContentId,
+    mediaSessionId: mediaSessionId ?? source.mediaSessionId, sessionEpoch: source.sessionEpoch,
+    bridgeInstanceId: source.bridgeInstanceId,
+    receiverOperationBlocked: receiverOperationBlocked ?? source.receiverOperationBlocked,
+    snapshotRevision: source.snapshotRevision,
+  );
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _navigationLoads.dispose();
+    unawaited(_eventSubscription?.cancel());
+    _eventSubscription = null;
+    super.dispose();
   }
 
   @visibleForTesting

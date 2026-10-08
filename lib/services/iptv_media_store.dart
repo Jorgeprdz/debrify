@@ -15,6 +15,10 @@ import 'profiles/profile_runtime.dart';
 import 'webdav_sync/webdav_sync_library_models.dart';
 import 'webdav_sync/webdav_sync_library_mutation.dart';
 
+/// Throwing from the transaction callback rolls back a stale completion's
+/// delete and every tombstone; only this private cancellation is swallowed.
+class _ObsoleteVideoResumeRemoval implements Exception {}
+
 /// SQLite-backed store for IPTV favorites, IPTV watch history and the shared
 /// video-resume map.
 ///
@@ -1966,12 +1970,19 @@ class IptvMediaStore {
   static Future<void> removeVideoResume(
     String key, {
     bool playbackCheckpoint = false,
+    bool Function()? permitted,
     WebDavSyncMutationOrigin origin = WebDavSyncMutationOrigin.user,
   }) async {
     if (key.isEmpty) return Future<void>.value();
     var changed = false;
+    void requireCurrent() {
+      if (permitted != null && !permitted()) throw _ObsoleteVideoResumeRemoval();
+    }
+    try {
     await _runScoped((_) async {
+      if (permitted != null && !permitted()) return;
       await DebrifyTvDatabase.instance.runTxn((txn) async {
+        requireCurrent();
         final rows = await txn.query(
           'video_resume',
           columns: const <String>['source_id'],
@@ -1987,6 +1998,7 @@ class IptvMediaStore {
                 whereArgs: <Object?>[WebDavSyncLibraryKinds.videoResume, key],
               )
             : const <Map<String, Object?>>[];
+        requireCurrent();
         final owners = <String>{
           for (final row in rows)
             ((row['source_id'] as String?)?.isNotEmpty == true)
@@ -1999,9 +2011,11 @@ class IptvMediaStore {
           where: 'resume_key = ?',
           whereArgs: [key],
         );
+        requireCurrent();
         if (owners.isNotEmpty && origin == WebDavSyncMutationOrigin.user) {
           final now = _nextStampMs();
           for (final owner in owners) {
+            requireCurrent();
             await _writeLibraryState(
               txn,
               kind: WebDavSyncLibraryKinds.videoResume,
@@ -2012,11 +2026,15 @@ class IptvMediaStore {
               origin: origin,
             );
           }
+          requireCurrent();
           await _bumpLibraryRevision(txn);
+          requireCurrent();
           changed = true;
         }
+        requireCurrent();
       });
     });
+    } on _ObsoleteVideoResumeRemoval { return; }
     if (changed) WebDavSyncLibraryMutation.notifyUserMutation(playbackCheckpoint: playbackCheckpoint);
   }
 

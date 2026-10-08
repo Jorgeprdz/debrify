@@ -1,0 +1,147 @@
+PASS — target branch, isolated checkout
+PASS — git diff --check HEAD
+PASS — android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastManager.kt: balanced lexical delimiters and local imports
+PASS — lib/screens/video_player/widgets/source_sheet.dart: balanced lexical delimiters and local imports
+PASS — lib/screens/video_player_screen.dart: balanced lexical delimiters and local imports
+PASS — lib/services/cast_load_coordinator.dart: balanced lexical delimiters and local imports
+PASS — lib/services/cast_player_authority.dart: balanced lexical delimiters and local imports
+PASS — lib/services/cast_service.dart: balanced lexical delimiters and local imports
+PASS — lib/services/iptv_media_store.dart: balanced lexical delimiters and local imports
+PASS — lib/services/mdblist/mdblist_scrobble_session.dart: balanced lexical delimiters and local imports
+PASS — lib/services/profiles/profile_preferences.dart: balanced lexical delimiters and local imports
+PASS — lib/services/storage_service.dart: balanced lexical delimiters and local imports
+PASS — test/iptv_media_store_test.dart: balanced lexical delimiters and local imports
+PASS — test/profiles/cast_mutation_authority_test.dart: balanced lexical delimiters and local imports
+PASS — test/services/cast_load_coordinator_test.dart: balanced lexical delimiters and local imports
+PASS — test/services/cast_player_authority_test.dart: balanced lexical delimiters and local imports
+PASS — test/services/cast_series_language_preferences_test.dart: balanced lexical delimiters and local imports
+PASS — test/services/cast_service_coordination_test.dart: balanced lexical delimiters and local imports
+PASS — test/services/cast_service_test.dart: balanced lexical delimiters and local imports
+PASS — test/services/cast_stream_security_round5_test.dart: balanced lexical delimiters and local imports
+PASS — test/services/mdblist/mdblist_scrobble_session_test.dart: balanced lexical delimiters and local imports
+PASS — test/source_sheet_cast_intent_test.dart: balanced lexical delimiters and local imports
+PASS — persistent checkpoint documents
+PASS — 45 required distinct scenario IDs authored
+PASS — no duplicate scenario IDs
+PASS — C13: concrete assertions, no skip/placeholder
+PASS — C14: concrete assertions, no skip/placeholder
+PASS — C15: concrete assertions, no skip/placeholder
+PASS — C16: concrete assertions, no skip/placeholder
+PASS — C17: concrete assertions, no skip/placeholder
+PASS — C18: concrete assertions, no skip/placeholder
+PASS — E37: concrete assertions, no skip/placeholder
+PASS — E38: concrete assertions, no skip/placeholder
+PASS — E39: concrete assertions, no skip/placeholder
+PASS — E40: concrete assertions, no skip/placeholder
+PASS — E41: concrete assertions, no skip/placeholder
+PASS — E42: concrete assertions, no skip/placeholder
+PASS — I01: concrete assertions, no skip/placeholder
+PASS — I02: concrete assertions, no skip/placeholder
+PASS — I03: concrete assertions, no skip/placeholder
+PASS — I04: concrete assertions, no skip/placeholder
+PASS — I05: concrete assertions, no skip/placeholder
+PASS — I06: concrete assertions, no skip/placeholder
+PASS — L07: concrete assertions, no skip/placeholder
+PASS — L08: concrete assertions, no skip/placeholder
+PASS — L09: concrete assertions, no skip/placeholder
+PASS — L10: concrete assertions, no skip/placeholder
+PASS — L11: concrete assertions, no skip/placeholder
+PASS — L12: concrete assertions, no skip/placeholder
+PASS — P43: concrete assertions, no skip/placeholder
+PASS — P44: concrete assertions, no skip/placeholder
+PASS — P45: concrete assertions, no skip/placeholder
+PASS — R25: concrete assertions, no skip/placeholder
+PASS — R26: concrete assertions, no skip/placeholder
+PASS — R27: concrete assertions, no skip/placeholder
+PASS — R28: concrete assertions, no skip/placeholder
+PASS — R29: concrete assertions, no skip/placeholder
+PASS — R30: concrete assertions, no skip/placeholder
+PASS — S19: concrete assertions, no skip/placeholder
+PASS — S20: concrete assertions, no skip/placeholder
+PASS — S21: concrete assertions, no skip/placeholder
+PASS — S22: concrete assertions, no skip/placeholder
+PASS — S23: concrete assertions, no skip/placeholder
+PASS — S24: concrete assertions, no skip/placeholder
+PASS — T31: concrete assertions, no skip/placeholder
+PASS — T32: concrete assertions, no skip/placeholder
+PASS — T33: concrete assertions, no skip/placeholder
+PASS — T34: concrete assertions, no skip/placeholder
+PASS — T35: concrete assertions, no skip/placeholder
+PASS — T36: concrete assertions, no skip/placeholder
+PASS — scenario matrix covers all required IDs
+PASS — C13: complete matrix and actual production references
+PASS — C14: complete matrix and actual production references
+PASS — C15: complete matrix and actual production references
+PASS — C16: complete matrix and actual production references
+PASS — C17: complete matrix and actual production references
+PASS — C18: complete matrix and actual production references
+PASS — E37: complete matrix and actual production references
+PASS — E38: complete matrix and actual production references
+PASS — E39: complete matrix and actual production references
+PASS — E40: complete matrix and actual production references
+PASS — E41: complete matrix and actual production references
+PASS — E42: complete matrix and actual production references
+PASS — I01: complete matrix and actual production references
+PASS — I02: complete matrix and actual production references
+PASS — I03: complete matrix and actual production references
+PASS — I04: complete matrix and actual production references
+PASS — I05: complete matrix and actual production references
+PASS — I06: complete matrix and actual production references
+PASS — L07: complete matrix and actual production references
+PASS — L08: complete matrix and actual production references
+PASS — L09: complete matrix and actual production references
+PASS — L10: complete matrix and actual production references
+PASS — L11: complete matrix and actual production references
+PASS — L12: complete matrix and actual production references
+PASS — P43: complete matrix and actual production references
+PASS — P44: complete matrix and actual production references
+PASS — P45: complete matrix and actual production references
+PASS — R25: complete matrix and actual production references
+PASS — R26: complete matrix and actual production references
+PASS — R27: complete matrix and actual production references
+PASS — R28: complete matrix and actual production references
+PASS — R29: complete matrix and actual production references
+PASS — R30: complete matrix and actual production references
+PASS — S19: complete matrix and actual production references
+PASS — S20: complete matrix and actual production references
+PASS — S21: complete matrix and actual production references
+PASS — S22: complete matrix and actual production references
+PASS — S23: complete matrix and actual production references
+PASS — S24: complete matrix and actual production references
+PASS — T31: complete matrix and actual production references
+PASS — T32: complete matrix and actual production references
+PASS — T33: complete matrix and actual production references
+PASS — T34: complete matrix and actual production references
+PASS — T35: complete matrix and actual production references
+PASS — T36: complete matrix and actual production references
+PASS — Dart/Kotlin wire contract: bridgeInstanceId
+PASS — Dart/Kotlin wire contract: sessionEpoch
+PASS — Dart/Kotlin wire contract: snapshotRevision
+PASS — Dart/Kotlin wire contract: receiverOperationBlocked
+PASS — Dart/Kotlin wire contract: expectedSessionEpoch
+PASS — Dart/Kotlin wire contract: expectedContentId
+PASS — Dart/Kotlin wire contract: expectedMediaSessionId
+PASS — semantic audit binds exact current source tree
+PASS — reviewed finding ledger has no open P0/P1
+PASS — G01: explicit reviewed, hash-bound evidence
+PASS — G02: explicit reviewed, hash-bound evidence
+PASS — G03: explicit reviewed, hash-bound evidence
+PASS — G04: explicit reviewed, hash-bound evidence
+PASS — G05: explicit reviewed, hash-bound evidence
+PASS — G06: explicit reviewed, hash-bound evidence
+PASS — G07: explicit reviewed, hash-bound evidence
+PASS — G08: explicit reviewed, hash-bound evidence
+PASS — G09: explicit reviewed, hash-bound evidence
+PASS — G10: explicit reviewed, hash-bound evidence
+PASS — G11: explicit reviewed, hash-bound evidence
+PASS — G12: explicit reviewed, hash-bound evidence
+PASS — G13: explicit reviewed, hash-bound evidence
+PASS — G14: explicit reviewed, hash-bound evidence
+PASS — G15: explicit reviewed, hash-bound evidence
+PASS — G16: explicit reviewed, hash-bound evidence
+PASS — G17: explicit reviewed, hash-bound evidence
+PASS — G18: explicit reviewed, hash-bound evidence
+PASS — independent adversarial review closed
+SOURCE SHA256: 4c26b097a487ef9afd3568daa59a2961f4a9a9262755bf46504b0779e75b23b3
+BUILD / ANALYZE / UNIT TESTS / GRADLE: NOT RUN; ACTIONS: NOT LAUNCHED
+MECHANICAL STATIC EVIDENCE PASS — runtime and test execution remain unverified

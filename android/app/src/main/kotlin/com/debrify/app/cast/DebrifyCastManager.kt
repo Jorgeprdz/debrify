@@ -1,9 +1,10 @@
 package com.debrify.app.cast
 
+import android.os.Handler
+import android.os.Looper
 import androidx.mediarouter.app.MediaRouteChooserDialog
 import androidx.mediarouter.app.MediaRouteControllerDialog
 import com.debrify.app.MainActivity
-import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaSeekOptions
 import com.google.android.gms.cast.MediaStatus
 import com.google.android.gms.cast.MediaTrack
@@ -13,204 +14,613 @@ import com.google.android.gms.cast.framework.CastState
 import com.google.android.gms.cast.framework.CastStateListener
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
+import com.google.android.gms.common.api.PendingResult
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.lang.ref.WeakReference
+import java.util.IdentityHashMap
+import java.util.UUID
 
 class DebrifyCastManager(
     private val activity: MainActivity,
     messenger: BinaryMessenger,
-) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
+) : MethodChannel.MethodCallHandler {
     companion object {
         const val METHOD_CHANNEL = "com.debrify.app/cast"
         const val EVENT_CHANNEL = "com.debrify.app/cast_events"
         private const val PROGRESS_PERIOD_MS = 1_000L
+        private const val OPERATION_DEADLINE_MS = 30_000L
+        private val mainHandler = Handler(Looper.getMainLooper())
+
+        // All access is on the Android main thread, as required by Cast SDK.
+        // Weak registry entries avoid retaining an idle, destroyed Flutter engine.
+        private val bridges = mutableListOf<WeakReference<EngineBridge>>()
+        private val receivers = IdentityHashMap<CastSession, MutableList<ReceiverLedger>>()
+        private val retiredSessions = mutableListOf<WeakReference<CastSession>>()
+        private val endingSessions = IdentityHashMap<CastSession, Boolean>()
+        private val observedContexts = IdentityHashMap<CastContext, Boolean>()
+
+        private fun bridgeFor(messenger: BinaryMessenger): EngineBridge {
+            bridges.removeAll { it.get() == null }
+            bridges.mapNotNull { it.get() }.firstOrNull { it.messenger === messenger }
+                ?.let { return it }
+            return EngineBridge(messenger).also { bridges.add(WeakReference(it)) }
+        }
+
+        private fun ledgerFor(session: CastSession, client: RemoteMediaClient): ReceiverLedger {
+            val entries = receivers.getOrPut(session) { mutableListOf() }
+            return entries.firstOrNull { !it.retired && it.client === client }
+                ?: ReceiverLedger(session, client).also {
+                    it.ending = endingSessions.containsKey(session)
+                    entries.add(it)
+                }
+        }
+
+        private fun isRetired(session: CastSession): Boolean {
+            retiredSessions.removeAll { it.get() == null }
+            return retiredSessions.any { it.get() === session }
+        }
+
+        private fun notifyBridges() {
+            bridges.removeAll { it.get() == null }
+            bridges.mapNotNull { it.get() }.forEach { it.emit() }
+        }
+
+        private fun physicalOperationExists(): Boolean =
+            receivers.values.any { ledgers -> ledgers.any { it.operation != null } }
+
+        private fun uncertainOperationExists(): Boolean =
+            endingSessions.isNotEmpty() || receivers.values.any { ledgers ->
+                ledgers.any { it.operation?.uncertain == true || it.ending }
+            }
+
+        private fun markUncertain(ledger: ReceiverLedger, operation: PhysicalOperation) {
+            if (ledger.retired || ledger.operation !== operation) return
+            operation.uncertain = true
+            ledger.errorCode = "CAST_RECEIVER_OPERATION_BLOCKED"
+            // A logical deadline or SDK failure does not prove cancellation.
+            // Keep both the original Result and physical fence until a definitive
+            // successful reply or confirmed SDK session termination.
+            notifyBridges()
+        }
+
+        private fun retireSession(session: CastSession) {
+            // Mark retired before any Result/stream callback can synchronously
+            // read SDK properties still reflecting the ending session.
+            if (!isRetired(session)) retiredSessions.add(WeakReference(session))
+            endingSessions.remove(session)
+            val ledgers = receivers.remove(session).orEmpty()
+            ledgers.forEach { ledger ->
+                ledger.capture()
+                ledger.retired = true
+                ledger.ending = false
+                val operation = ledger.operation
+                ledger.operation = null
+                operation?.deadline?.let(mainHandler::removeCallbacks)
+                operation?.pendingResult = null
+                operation?.reply?.error(
+                    "CAST_SESSION_RETIRED", "The Cast session ended before the operation completed.",
+                )
+            }
+            bridges.mapNotNull { it.get() }.forEach { bridge ->
+                if (bridge.lastLedger?.session === session) {
+                    bridge.detachedState = DebrifyCastState.DISCONNECTED
+                    bridge.detachedErrorCode = null
+                }
+                bridge.completeDisconnect(session)
+            }
+            notifyBridges()
+        }
+
+        // This observer belongs to CastContext, not an Activity. It remains
+        // installed across manager disposal, so retirement can settle the ledger
+        // even in the gap before the replacement Activity attaches.
+        private val retirementListener = object : SessionManagerListener<CastSession> {
+            override fun onSessionStarting(session: CastSession) = Unit
+            override fun onSessionStarted(session: CastSession, sessionId: String) = Unit
+            override fun onSessionStartFailed(session: CastSession, error: Int) = Unit
+            override fun onSessionResuming(session: CastSession, sessionId: String) = Unit
+            override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) = Unit
+            override fun onSessionResumeFailed(session: CastSession, error: Int) {
+                // Resume failure alone is not an onSessionEnded confirmation.
+                receivers[session]?.forEach { ledger ->
+                    ledger.operation?.let { markUncertain(ledger, it) }
+                }
+            }
+            override fun onSessionEnding(session: CastSession) {
+                if (isRetired(session)) return
+                if (!receivers.containsKey(session) && !endingSessions.containsKey(session) &&
+                    observedContexts.keys.none { it.sessionManager.currentCastSession === session }) return
+                endingSessions[session] = true
+                receivers[session]?.forEach { it.ending = true }
+                notifyBridges()
+            }
+            override fun onSessionEnded(session: CastSession, error: Int) = retireSession(session)
+            override fun onSessionSuspended(session: CastSession, reason: Int) {
+                receivers[session]?.forEach { ledger ->
+                    ledger.operation?.let { markUncertain(ledger, it) }
+                }
+            }
+        }
+
+        private fun observeRetirement(context: CastContext) {
+            if (observedContexts.containsKey(context)) return
+            context.sessionManager.addSessionManagerListener(
+                retirementListener, CastSession::class.java,
+            )
+            observedContexts[context] = true
+        }
+
+        private fun finishPhysicalSuccess(ledger: ReceiverLedger, operation: PhysicalOperation) {
+            if (ledger.retired || ledger.operation !== operation) return
+            ledger.operation = null
+            operation.deadline?.let(mainHandler::removeCallbacks)
+            operation.pendingResult = null
+            ledger.capture()
+            if (!ledger.mediaErrorActive) ledger.errorCode = null
+            ledger.updatePlaybackState()
+            val snapshot = operation.bridge.snapshot()
+            // The snapshot always describes actual receiver reality. Dart must
+            // quarantine a mismatching identity rather than hide that reality.
+            operation.reply.success(snapshot)
+            operation.bridge.emit(snapshot)
+            notifyBridges()
+        }
+
+        private fun startPhysicalOperation(
+            bridge: EngineBridge,
+            ledger: ReceiverLedger,
+            result: MethodChannel.Result,
+            command: (RemoteMediaClient) -> PendingResult<RemoteMediaClient.MediaChannelResult>,
+        ) {
+            if (ledger.retired || ledger.ending || endingSessions.isNotEmpty() || physicalOperationExists()) {
+                result.error(
+                    "CAST_RECEIVER_OPERATION_BLOCKED",
+                    "A receiver operation is still pending. End the Cast session before reconnecting.",
+                    null,
+                )
+                return
+            }
+            val operation = PhysicalOperation(bridge, Reply(result))
+            ledger.operation = operation
+            operation.deadline = Runnable { markUncertain(ledger, operation) }
+            mainHandler.postDelayed(operation.deadline!!, OPERATION_DEADLINE_MS)
+            try {
+                val pending = command(ledger.client)
+                operation.pendingResult = pending
+                pending.setResultCallback { mediaResult ->
+                    if (ledger.retired || ledger.operation !== operation) return@setResultCallback
+                    if (mediaResult.status.isSuccess) {
+                        finishPhysicalSuccess(ledger, operation)
+                    } else {
+                        // Transport timeouts/cancellation and receiver failures
+                        // are not interchangeable. Conservatively retain the
+                        // fence for all post-dispatch non-success replies.
+                        markUncertain(ledger, operation)
+                    }
+                }
+            } catch (_: Exception) {
+                // The SDK call may have sent the command before throwing.
+                markUncertain(ledger, operation)
+            }
+        }
+
+        private fun tracks(client: RemoteMediaClient, type: Int): List<Map<String, Any?>> {
+            val active = client.mediaStatus?.activeTrackIds?.toSet().orEmpty()
+            return client.mediaInfo?.mediaTracks.orEmpty().filter { it.type == type }.map { track ->
+                mapOf(
+                    "id" to track.id.toString(),
+                    "type" to if (type == MediaTrack.TYPE_AUDIO) "audio" else "subtitle",
+                    "language" to track.language,
+                    "label" to track.name,
+                    "mimeType" to track.contentType,
+                    "codec" to null,
+                    "selected" to active.contains(track.id),
+                )
+            }
+        }
     }
 
-    private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL)
-    private val eventChannel = EventChannel(messenger, EVENT_CHANNEL)
-    private var eventSink: EventChannel.EventSink? = null
-    private var castContext: CastContext? = null
-    private var remoteMediaClient: RemoteMediaClient? = null
+    private class Reply(result: MethodChannel.Result) {
+        private var target: MethodChannel.Result? = result
+        fun success(value: Any?) {
+            val result = target ?: return
+            target = null
+            // A destroyed engine cannot receive a reply. Never crash or send twice.
+            runCatching { result.success(value) }
+        }
+        fun error(code: String, message: String) {
+            val result = target ?: return
+            target = null
+            runCatching { result.error(code, message, null) }
+        }
+    }
+
+    private class PhysicalOperation(val bridge: EngineBridge, val reply: Reply) {
+        var uncertain = false
+        var deadline: Runnable? = null
+        var pendingResult: PendingResult<RemoteMediaClient.MediaChannelResult>? = null
+    }
+
+    private class ReceiverLedger(val session: CastSession, val client: RemoteMediaClient) {
+        // Stable across manager/Activity replacement for this exact SDK session
+        // and client. A confirmed retirement creates a new epoch next time.
+        val sessionEpoch = UUID.randomUUID().toString()
+        var retired = false
+        var ending = false
+        var operation: PhysicalOperation? = null
+        var state = DebrifyCastState.CONNECTED
+        var positionMs: Long? = null
+        var durationMs: Long? = null
+        var resumeShouldPlay: Boolean? = null
+        var errorCode: String? = null
+        var mediaErrorActive = false
+        var endedSequence = 0
+        private var endedForCurrentMedia = false
+        private var observedMediaSessionId: Long? = null
+        private var observedContentId: String? = null
+
+        fun capture() {
+            try {
+                val mediaSessionId = client.mediaStatus?.mediaSessionId?.toLong()
+                val contentId = client.mediaInfo?.contentId
+                if (mediaSessionId != observedMediaSessionId || contentId != observedContentId) {
+                    observedMediaSessionId = mediaSessionId
+                    observedContentId = contentId
+                    positionMs = null
+                    durationMs = null
+                    resumeShouldPlay = null
+                    endedForCurrentMedia = false
+                    mediaErrorActive = false
+                }
+                positionMs = client.approximateStreamPosition.takeIf { it >= 0 }
+                durationMs = client.mediaInfo?.streamDuration?.takeIf { it > 0 }
+                if (client.isPlaying) resumeShouldPlay = true
+                if (client.isPaused) resumeShouldPlay = false
+            } catch (_: Exception) {
+                durationMs = null
+            }
+        }
+
+        fun updatePlaybackState() {
+            val status = runCatching { client.mediaStatus }.getOrNull()
+            if (mediaErrorActive || (status?.playerState == MediaStatus.PLAYER_STATE_IDLE &&
+                    status.idleReason == MediaStatus.IDLE_REASON_ERROR)) {
+                state = DebrifyCastState.ERROR
+                errorCode = "CAST_MEDIA_ERROR"
+                return
+            }
+            if (status?.playerState == MediaStatus.PLAYER_STATE_IDLE &&
+                status.idleReason == MediaStatus.IDLE_REASON_FINISHED) {
+                if (!endedForCurrentMedia) {
+                    endedForCurrentMedia = true
+                    ++endedSequence
+                }
+                state = DebrifyCastState.ENDED
+                resumeShouldPlay = false
+                return
+            }
+            if (status != null && status.playerState != MediaStatus.PLAYER_STATE_IDLE &&
+                status.playerState != MediaStatus.PLAYER_STATE_UNKNOWN) {
+                endedForCurrentMedia = false
+            }
+            state = when {
+                runCatching { client.isPlaying }.getOrDefault(false) -> DebrifyCastState.PLAYING
+                runCatching { client.isPaused }.getOrDefault(false) -> DebrifyCastState.PAUSED
+                else -> DebrifyCastState.CONNECTED
+            }
+        }
+    }
+
+    private class DisconnectReply(val session: CastSession, val reply: Reply) {
+        var deadline: Runnable? = null
+    }
+
+    private class EngineBridge(val messenger: BinaryMessenger) :
+        MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
+        private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL)
+        private val eventChannel = EventChannel(messenger, EVENT_CHANNEL)
+        val bridgeInstanceId = UUID.randomUUID().toString()
+        var owner: DebrifyCastManager? = null
+        var context: CastContext? = null
+        var lastLedger: ReceiverLedger? = null
+        var detachedState = DebrifyCastState.DISCONNECTED
+        var detachedErrorCode: String? = null
+        private var revision = 0L
+        private var eventSink: EventChannel.EventSink? = null
+        private val disconnectReplies = mutableListOf<DisconnectReply>()
+
+        init {
+            methodChannel.setMethodCallHandler(this)
+            eventChannel.setStreamHandler(this)
+        }
+
+        override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+            eventSink = events
+            emit()
+        }
+        override fun onCancel(arguments: Any?) { eventSink = null }
+
+        override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+            when (call.method) {
+                "getState" -> {
+                    owner?.synchronizeSession()
+                    result.success(snapshot())
+                }
+                "isCastAvailable" -> result.success(isAvailable())
+                "disconnect" -> disconnect(result)
+                else -> {
+                    val activeOwner = owner
+                    if (activeOwner == null) {
+                        result.error("CAST_BRIDGE_DETACHED", "Cast Activity is being recreated.", null)
+                    } else activeOwner.onMethodCall(call, result)
+                }
+            }
+        }
+
+        private fun isAvailable(): Boolean {
+            val cast = context ?: return false
+            return runCatching {
+                cast.sessionManager.currentCastSession?.isConnected == true ||
+                    cast.castState != CastState.NO_DEVICES_AVAILABLE
+            }.getOrDefault(false)
+        }
+
+        fun snapshot(): Map<String, Any?> {
+            val session = runCatching { context?.sessionManager?.currentCastSession }.getOrNull()
+            val client = runCatching {
+                session?.takeIf { it.isConnected && !isRetired(it) }?.remoteMediaClient
+            }.getOrNull()
+            val current = if (session != null && client != null) ledgerFor(session, client) else null
+            if (current != null) {
+                lastLedger = current
+                current.capture()
+                current.updatePlaybackState()
+            }
+            val timing = current ?: lastLedger
+            val lifecycleUncertain = current == null && lastLedger?.retired == false
+            val audio = current?.let { runCatching { tracks(it.client, MediaTrack.TYPE_AUDIO) }.getOrDefault(emptyList()) }.orEmpty()
+            val text = current?.let { runCatching { tracks(it.client, MediaTrack.TYPE_TEXT) }.getOrDefault(emptyList()) }.orEmpty()
+            ++revision
+            return mapOf(
+                "available" to isAvailable(),
+                "connected" to (current != null),
+                "state" to (current?.state ?: detachedState).wireValue,
+                "deviceName" to current?.session?.castDevice?.friendlyName,
+                "positionMs" to timing?.positionMs,
+                "durationMs" to timing?.durationMs,
+                "resumePositionMs" to timing?.positionMs,
+                "resumeShouldPlay" to timing?.resumeShouldPlay,
+                "errorCode" to if (uncertainOperationExists() || lifecycleUncertain) "CAST_RECEIVER_OPERATION_BLOCKED"
+                    else current?.errorCode ?: detachedErrorCode,
+                "availableAudioTracks" to audio,
+                "availableSubtitleTracks" to text,
+                "selectedAudioTrack" to audio.firstOrNull { it["selected"] == true }?.get("id"),
+                "selectedSubtitleTrack" to text.firstOrNull { it["selected"] == true }?.get("id"),
+                "endedSequence" to (timing?.endedSequence ?: 0),
+                // Signed content IDs are transient channel data, never logged/stored.
+                "mediaContentId" to current?.client?.mediaInfo?.contentId,
+                "mediaSessionId" to current?.client?.mediaStatus?.mediaSessionId,
+                // Suspension is not retirement. Preserve this epoch until the
+                // SDK confirms onSessionEnded, so a resumed session can be adopted.
+                "sessionEpoch" to (current?.sessionEpoch ?:
+                    lastLedger?.takeIf { !it.retired }?.sessionEpoch),
+                "bridgeInstanceId" to bridgeInstanceId,
+                "snapshotRevision" to revision,
+                "receiverOperationBlocked" to (
+                    lifecycleUncertain || uncertainOperationExists() ||
+                        (physicalOperationExists() &&
+                            (current == null || current.operation == null || current.operation?.bridge !== this))
+                    ),
+            )
+        }
+
+        fun emit(value: Map<String, Any?> = snapshot()) {
+            val sink = eventSink ?: return
+            runCatching { sink.success(value) }
+        }
+
+        private fun disconnect(result: MethodChannel.Result) {
+            val cast = context
+            val session = cast?.sessionManager?.currentCastSession
+            if (cast == null || session == null) {
+                if (physicalOperationExists()) {
+                    result.error(
+                        "CAST_RECEIVER_OPERATION_BLOCKED",
+                        "The previous receiver session has not confirmed termination.", null,
+                    )
+                } else result.success(snapshot())
+                return
+            }
+            // End-session request is allowed through the physical operation fence.
+            // Do not report disconnection or release that fence merely on dispatch.
+            val pending = DisconnectReply(session, Reply(result))
+            disconnectReplies.add(pending)
+            pending.deadline = Runnable {
+                pending.reply.error(
+                    "CAST_DISCONNECT_PENDING", "Cast session termination is not yet confirmed.",
+                )
+                // No physical exclusion or session identity is retired here.
+                notifyBridges()
+            }
+            mainHandler.postDelayed(pending.deadline!!, OPERATION_DEADLINE_MS)
+            receivers[session]?.forEach { it.ending = true }
+            endingSessions[session] = true
+            notifyBridges()
+            try {
+                cast.sessionManager.endCurrentSession(true)
+            } catch (_: Exception) {
+                pending.deadline?.let(mainHandler::removeCallbacks)
+                disconnectReplies.remove(pending)
+                pending.reply.error("CAST_DISCONNECT_FAILED", "Unable to end the Cast session.")
+                // An exception may occur after dispatch. Remain fenced.
+                notifyBridges()
+            }
+        }
+
+        fun completeDisconnect(session: CastSession) {
+            val completed = disconnectReplies.filter { it.session === session }
+            disconnectReplies.removeAll(completed.toSet())
+            completed.forEach {
+                it.deadline?.let(mainHandler::removeCallbacks)
+                it.reply.success(snapshot())
+            }
+        }
+    }
+
+    private val bridge = bridgeFor(messenger)
     private var disposed = false
+    private var castContext: CastContext? = null
+    private var attachedSession: CastSession? = null
+    private var prospectiveSession: CastSession? = null
+    private var remoteMediaClient: RemoteMediaClient? = null
+    private var ledger: ReceiverLedger? = null
+    private var bindingGeneration = 0L
+    private var boundCallback: RemoteMediaClient.Callback? = null
+    private var boundProgress: RemoteMediaClient.ProgressListener? = null
 
-    private var state = DebrifyCastState.DISCONNECTED
-    private var deviceName: String? = null
-    private var lastPositionMs: Long? = null
-    private var lastDurationMs: Long? = null
-    private var resumeShouldPlay: Boolean? = null
-    private var lastErrorCode: String? = null
-    private var endedSequence: Int = 0
-    private var endedForCurrentLoad = false
-    private var observedMediaSessionId: String? = null
-    private var observedMediaContentId: String? = null
+    private fun ownsBridge(): Boolean = !disposed && bridge.owner === this
+    private fun currentSession(): CastSession? = castContext?.sessionManager?.currentCastSession
+    private fun ownsSession(session: CastSession): Boolean =
+        ownsBridge() && currentSession() === session
+    private fun ownsCallback(client: RemoteMediaClient, generation: Long): Boolean =
+        ownsBridge() && generation == bindingGeneration && client === remoteMediaClient &&
+            attachedSession === currentSession() && attachedSession?.remoteMediaClient === client
 
-    private val castStateListener = CastStateListener {
-        if (!disposed) emitSnapshot()
-    }
-
-    private val remoteCallback = object : RemoteMediaClient.Callback() {
-        override fun onStatusUpdated() {
-            captureRemotePosition()
-            updatePlaybackState()
-            emitSnapshot()
-        }
-
-        override fun onMetadataUpdated() {
-            captureRemotePosition()
-            updatePlaybackState()
-            emitSnapshot()
-        }
-
-        override fun onMediaError(mediaError: com.google.android.gms.cast.MediaError) {
-            captureRemotePosition()
-            state = DebrifyCastState.ERROR
-            lastErrorCode = "CAST_MEDIA_ERROR"
-            emitSnapshot()
-        }
-    }
-
-    private val progressListener = RemoteMediaClient.ProgressListener { _, _ ->
-        // Read times from the SAME identified media, not a late progress
-        // callback that could belong to the previous channel.
-        captureRemotePosition()
-        updatePlaybackState()
-        emitSnapshot()
-    }
-
+    private val castStateListener = CastStateListener { if (ownsBridge()) bridge.emit() }
     private val sessionListener = object : SessionManagerListener<CastSession> {
         override fun onSessionStarting(session: CastSession) {
-            state = DebrifyCastState.CONNECTING
-            lastErrorCode = null
-            emitSnapshot()
+            if (!ownsSession(session)) return
+            prospectiveSession = session
+            bridge.detachedState = DebrifyCastState.CONNECTING
+            bridge.detachedErrorCode = null
+            bridge.emit()
         }
-
         override fun onSessionStarted(session: CastSession, sessionId: String) {
+            if (!ownsSession(session)) return
             bindSession(session)
         }
-
         override fun onSessionStartFailed(session: CastSession, error: Int) {
-            state = DebrifyCastState.ERROR
-            lastErrorCode = "CAST_SESSION_START_FAILED"
-            emitSnapshot()
+            if (!ownsBridge() || prospectiveSession !== session ||
+                (currentSession() != null && currentSession() !== session)) return
+            prospectiveSession = null
+            bridge.detachedState = DebrifyCastState.ERROR
+            bridge.detachedErrorCode = "CAST_SESSION_START_FAILED"
+            bridge.emit()
         }
-
         override fun onSessionEnding(session: CastSession) {
-            captureRemotePosition()
+            if (!ownsBridge() || attachedSession !== session) return
+            ledger?.capture()
         }
-
         override fun onSessionEnded(session: CastSession, error: Int) {
-            captureRemotePosition()
+            if (!ownsBridge() || (attachedSession !== session && prospectiveSession !== session)) return
             unbindRemoteClient()
-            deviceName = null
-            state = DebrifyCastState.DISCONNECTED
-            if (error != 0) lastErrorCode = "CAST_SESSION_LOST"
-            emitSnapshot()
+            attachedSession = null
+            prospectiveSession = null
+            ledger = null
+            bridge.detachedState = DebrifyCastState.DISCONNECTED
+            bridge.detachedErrorCode = if (error != 0) "CAST_SESSION_LOST" else null
+            bridge.emit()
         }
-
         override fun onSessionResuming(session: CastSession, sessionId: String) {
-            state = DebrifyCastState.CONNECTING
-            emitSnapshot()
+            if (!ownsSession(session)) return
+            prospectiveSession = session
+            bridge.detachedState = DebrifyCastState.CONNECTING
+            bridge.emit()
         }
-
         override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+            if (!ownsSession(session)) return
             bindSession(session)
         }
-
         override fun onSessionResumeFailed(session: CastSession, error: Int) {
-            captureRemotePosition()
+            if (!ownsBridge() || (attachedSession !== session && prospectiveSession !== session) ||
+                (currentSession() != null && currentSession() !== session)) return
             unbindRemoteClient()
-            state = DebrifyCastState.ERROR
-            lastErrorCode = "CAST_SESSION_LOST"
-            emitSnapshot()
+            attachedSession = null
+            prospectiveSession = null
+            ledger = null
+            bridge.detachedState = DebrifyCastState.ERROR
+            bridge.detachedErrorCode = "CAST_SESSION_LOST"
+            bridge.emit()
         }
-
         override fun onSessionSuspended(session: CastSession, reason: Int) {
-            captureRemotePosition()
-            state = DebrifyCastState.CONNECTING
-            lastErrorCode = "CAST_SESSION_LOST"
-            emitSnapshot()
+            if (!ownsSession(session) || attachedSession !== session) return
+            ledger?.capture()
+            bridge.detachedState = DebrifyCastState.CONNECTING
+            bridge.detachedErrorCode = "CAST_SESSION_LOST"
+            bridge.emit()
         }
     }
 
     init {
-        methodChannel.setMethodCallHandler(this)
-        eventChannel.setStreamHandler(this)
+        val previousOwner = bridge.owner
+        bridge.owner = this
+        // Previous owner's disposal cannot unregister the engine-scoped channels
+        // or subscriber now used by this owner.
+        previousOwner?.dispose()
         initializeCastContext()
     }
 
     private fun initializeCastContext() {
-        if (disposed || castContext != null) return
+        if (!ownsBridge() || castContext != null) return
         try {
             val context = CastContext.getSharedInstance(activity)
             castContext = context
+            bridge.context = context
+            observeRetirement(context)
             context.addCastStateListener(castStateListener)
-            context.sessionManager.addSessionManagerListener(
-                sessionListener,
-                CastSession::class.java,
-            )
-            context.sessionManager.currentCastSession
-                ?.takeIf { it.isConnected }
-                ?.let(::bindSession)
-            emitSnapshot()
+            context.sessionManager.addSessionManagerListener(sessionListener, CastSession::class.java)
+            synchronizeSession()
+            bridge.emit()
         } catch (_: Exception) {
-            state = DebrifyCastState.ERROR
-            lastErrorCode = "CAST_UNAVAILABLE"
-            emitSnapshot()
+            bridge.detachedState = DebrifyCastState.ERROR
+            bridge.detachedErrorCode = "CAST_UNAVAILABLE"
+            bridge.emit()
         }
     }
 
-    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-        eventSink = events
-        emitSnapshot()
-    }
-
-    override fun onCancel(arguments: Any?) {
-        eventSink = null
+    private fun synchronizeSession() {
+        if (!ownsBridge()) return
+        val session = currentSession()
+        val client = session?.takeIf { it.isConnected }?.remoteMediaClient
+        if (session != null && client != null) {
+            if (session !== attachedSession || client !== remoteMediaClient) bindSession(session)
+        } else if (attachedSession !== session) {
+            unbindRemoteClient()
+            attachedSession = null
+            ledger = null
+            bridge.detachedState = DebrifyCastState.DISCONNECTED
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        if (disposed) {
+        if (!ownsBridge()) {
             result.error("CAST_DISPOSED", "Cast bridge is no longer attached.", null)
             return
         }
         when (call.method) {
-            "isCastAvailable" -> result.success(isCastAvailable())
             "openCastDialog", "requestSession" -> openCastDialog(result)
             "loadMedia" -> loadMedia(call.arguments, result)
-            "play" -> runRemoteCommand(result) { it.play() }
-            "pause" -> runRemoteCommand(result) { it.pause() }
+            "play" -> runRemoteCommand(call, result) { it.play() }
+            "pause" -> runRemoteCommand(call, result) { it.pause() }
+            "stop" -> runRemoteCommand(call, result) { it.stop() }
             "seek" -> seek(call, result)
-            "stop" -> runRemoteCommand(result) { it.stop() }
             "selectAudioTrack" -> selectAudioTrack(call, result)
             "selectSubtitleTrack" -> selectSubtitleTrack(call, result)
-            "disableSubtitles" -> disableSubtitles(result)
-            "disconnect" -> disconnect(result)
-            "getState" -> {
-                captureRemotePosition()
-                updatePlaybackState()
-                result.success(snapshot())
-            }
+            "disableSubtitles" -> disableSubtitles(call, result)
             else -> result.notImplemented()
         }
     }
 
     fun onHostResumed() {
-        if (disposed) return
+        if (!ownsBridge()) return
         initializeCastContext()
-        val session = castContext?.sessionManager?.currentCastSession
-        if (session?.isConnected == true && remoteMediaClient == null) bindSession(session)
-        captureRemotePosition()
-        updatePlaybackState()
-        emitSnapshot()
+        synchronizeSession()
+        bridge.emit()
     }
-
-    fun onHostPaused() {
-        if (disposed) return
-        captureRemotePosition()
-        emitSnapshot()
-    }
+    fun onHostPaused() { if (ownsBridge()) bridge.emit() }
 
     private fun openCastDialog(result: MethodChannel.Result) {
         val context = castContext
@@ -219,13 +629,10 @@ class DebrifyCastManager(
             return
         }
         try {
-            val session = context.sessionManager.currentCastSession
-            if (session?.isConnected == true) {
+            if (context.sessionManager.currentCastSession?.isConnected == true) {
                 MediaRouteControllerDialog(activity).show()
             } else {
-                MediaRouteChooserDialog(activity).apply {
-                    setRouteSelector(context.mergedSelector)
-                }.show()
+                MediaRouteChooserDialog(activity).apply { setRouteSelector(context.mergedSelector) }.show()
             }
             result.success(true)
         } catch (_: Exception) {
@@ -239,7 +646,6 @@ class DebrifyCastManager(
             result.error("CAST_BAD_REQUEST", "Cast media request is missing.", null)
             return
         }
-
         val request = try {
             CastMediaRequest.fromMap(raw)
         } catch (error: CastRequestException) {
@@ -249,7 +655,6 @@ class DebrifyCastManager(
             result.error("CAST_BAD_REQUEST", "Cast media request is invalid.", null)
             return
         }
-
         if (request.hasUnsupportedHeaders) {
             result.error(
                 "CAST_UNSUPPORTED_HEADERS",
@@ -258,367 +663,200 @@ class DebrifyCastManager(
             )
             return
         }
-
-        val client = connectedClient(result) ?: return
-        val loadBuilder = com.google.android.gms.cast.MediaLoadRequestData.Builder()
-            .setMediaInfo(request.toMediaInfo())
-            .setAutoplay(request.autoplay)
-        request.positionMs?.let(loadBuilder::setCurrentTime)
-        val loadRequest = loadBuilder.build()
-
-        resumeShouldPlay = request.autoplay
-        lastPositionMs = request.positionMs
-        lastDurationMs = request.durationMs
-        lastErrorCode = null
-        endedForCurrentLoad = false
-
-        try {
-            client.load(loadRequest).setResultCallback { mediaResult ->
-                if (mediaResult.status.isSuccess) {
-                    captureRemotePosition()
-                    updatePlaybackState()
-                    result.success(snapshot())
-                    emitSnapshot()
-                } else {
-                    lastErrorCode = "CAST_LOAD_FAILED"
-                    updatePlaybackState()
-                    emitSnapshot()
-                    result.error(
-                        "CAST_LOAD_FAILED",
-                        "The Cast receiver rejected the media load request.",
-                        mapOf("statusCode" to mediaResult.status.statusCode),
-                    )
-                }
-            }
-        } catch (_: Exception) {
-            lastErrorCode = "CAST_LOAD_FAILED"
-            updatePlaybackState()
-            emitSnapshot()
-            result.error("CAST_LOAD_FAILED", "Unable to send media to the Cast receiver.", null)
+        val receiver = connectedLedger(result) ?: return
+        val expectedEpoch = raw["expectedSessionEpoch"] as? String
+        if (expectedEpoch == null || expectedEpoch != receiver.sessionEpoch) {
+            result.error("CAST_STALE_LOAD", "Cast session changed before LOAD dispatch.", null)
+            return
         }
+        val load = try {
+            val builder = com.google.android.gms.cast.MediaLoadRequestData.Builder()
+                .setMediaInfo(request.toMediaInfo()).setAutoplay(request.autoplay)
+            request.positionMs?.let(builder::setCurrentTime)
+            builder.build()
+        } catch (_: Exception) {
+            result.error("CAST_BAD_REQUEST", "Cast media metadata is invalid.", null)
+            return
+        }
+        startPhysicalOperation(bridge, receiver, result) { it.load(load) }
+    }
+
+    private fun connectedLedger(result: MethodChannel.Result): ReceiverLedger? {
+        synchronizeSession()
+        val session = currentSession()
+        val client = session?.takeIf { it.isConnected }?.remoteMediaClient
+        val receiver = ledger
+        if (!ownsBridge() || client == null || client !== remoteMediaClient ||
+            session !== attachedSession || receiver == null || receiver.retired) {
+            result.error("CAST_SESSION_LOST", "No active Cast session.", null)
+            return null
+        }
+        return receiver
+    }
+
+    private fun controlLedger(call: MethodCall, result: MethodChannel.Result): ReceiverLedger? {
+        // Bind first: track IDs and receiver identity must come from this client.
+        val receiver = connectedLedger(result) ?: return null
+        val arguments = call.arguments as? Map<*, *>
+        val epoch = arguments?.get("expectedSessionEpoch") as? String
+        val contentId = arguments?.get("expectedContentId") as? String
+        val mediaSessionId = integerValue(arguments?.get("expectedMediaSessionId"))
+        if (epoch == null || contentId == null || mediaSessionId == null || mediaSessionId <= 0 ||
+            receiver.sessionEpoch != epoch || receiver.client.mediaInfo?.contentId != contentId ||
+            receiver.client.mediaStatus?.mediaSessionId?.toLong() != mediaSessionId) {
+            result.error("CAST_STALE_COMMAND", "Command target is no longer active.", null)
+            return null
+        }
+        if (receiver.ending || endingSessions.isNotEmpty() || physicalOperationExists()) {
+            result.error(
+                "CAST_RECEIVER_OPERATION_BLOCKED",
+                "A receiver operation is still pending. End the Cast session before reconnecting.", null,
+            )
+            return null
+        }
+        return receiver
+    }
+
+    private fun runRemoteCommand(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        command: (RemoteMediaClient) -> PendingResult<RemoteMediaClient.MediaChannelResult>,
+    ) {
+        val receiver = controlLedger(call, result) ?: return
+        startPhysicalOperation(bridge, receiver, result, command)
     }
 
     private fun seek(call: MethodCall, result: MethodChannel.Result) {
-        val positionMs = call.argument<Number>("positionMs")?.toLong()
+        val positionMs = integerValue((call.arguments as? Map<*, *>)?.get("positionMs"))
         if (positionMs == null || positionMs < 0) {
             result.error("CAST_BAD_SEEK", "A non-negative seek position is required.", null)
             return
         }
-        lastPositionMs = positionMs
-        val options = MediaSeekOptions.Builder()
-            .setPosition(positionMs)
-            .setResumeState(MediaSeekOptions.RESUME_STATE_UNCHANGED)
-            .build()
-        runRemoteCommand(result) { it.seek(options) }
+        val receiver = controlLedger(call, result) ?: return
+        val options = MediaSeekOptions.Builder().setPosition(positionMs)
+            .setResumeState(MediaSeekOptions.RESUME_STATE_UNCHANGED).build()
+        startPhysicalOperation(bridge, receiver, result) { it.seek(options) }
+    }
+
+    private fun integerValue(raw: Any?): Long? = when (raw) {
+        is Long -> raw
+        is Int -> raw.toLong()
+        is Short -> raw.toLong()
+        is Byte -> raw.toLong()
+        else -> null
+    }
+
+    private fun parseTrackId(call: MethodCall): Long? = when (val raw = (call.arguments as? Map<*, *>)?.get("trackId")) {
+        is String -> raw.toLongOrNull()
+        else -> integerValue(raw)
     }
 
     private fun selectAudioTrack(call: MethodCall, result: MethodChannel.Result) {
+        val receiver = controlLedger(call, result) ?: return
         val id = parseTrackId(call)
-        if (id == null || findTrack(id, MediaTrack.TYPE_AUDIO) == null) {
+        if (id == null || receiver.client.mediaInfo?.mediaTracks.orEmpty()
+                .none { it.id == id && it.type == MediaTrack.TYPE_AUDIO }) {
             result.error("CAST_TRACK_NOT_FOUND", "The requested audio track is not available.", null)
             return
         }
-        // Google explicitly documents that Default/Styled Media Receiver only
-        // supports text-track control through this API. Do not pretend success
-        // for audio by issuing a request the standard receiver does not support.
         result.error(
             "CAST_AUDIO_TRACK_UNSUPPORTED_RECEIVER",
-            "Remote audio-track selection requires a Custom Cast Receiver.",
-            mapOf("trackId" to id),
+            "Remote audio-track selection requires a Custom Cast Receiver.", mapOf("trackId" to id),
         )
+    }
+
+    private fun activeTrackIdsExcluding(client: RemoteMediaClient, type: Int): List<Long> {
+        val excluded = client.mediaInfo?.mediaTracks.orEmpty().filter { it.type == type }.map { it.id }.toSet()
+        return client.mediaStatus?.activeTrackIds?.toList().orEmpty().filterNot { it in excluded }
     }
 
     private fun selectSubtitleTrack(call: MethodCall, result: MethodChannel.Result) {
+        val receiver = controlLedger(call, result) ?: return
         val id = parseTrackId(call)
-        if (id == null || findTrack(id, MediaTrack.TYPE_TEXT) == null) {
+        if (id == null || receiver.client.mediaInfo?.mediaTracks.orEmpty()
+                .none { it.id == id && it.type == MediaTrack.TYPE_TEXT }) {
             result.error("CAST_TRACK_NOT_FOUND", "The requested subtitle track is not available.", null)
             return
         }
-        val active = activeTrackIdsExcluding(MediaTrack.TYPE_TEXT).toMutableList()
-        active.add(id)
-        setActiveTracks(active.toLongArray(), result)
+        val active = activeTrackIdsExcluding(receiver.client, MediaTrack.TYPE_TEXT) + id
+        startPhysicalOperation(bridge, receiver, result) { it.setActiveMediaTracks(active.toLongArray()) }
     }
 
-    private fun disableSubtitles(result: MethodChannel.Result) {
-        setActiveTracks(
-            activeTrackIdsExcluding(MediaTrack.TYPE_TEXT).toLongArray(),
-            result,
-        )
-    }
-
-    private fun setActiveTracks(ids: LongArray, result: MethodChannel.Result) {
-        val client = connectedClient(result) ?: return
-        try {
-            client.setActiveMediaTracks(ids).setResultCallback { mediaResult ->
-                if (mediaResult.status.isSuccess) {
-                    updatePlaybackState()
-                    result.success(snapshot())
-                    emitSnapshot()
-                } else {
-                    result.error(
-                        "CAST_TRACK_SELECTION_FAILED",
-                        "The Cast receiver rejected the track selection.",
-                        mapOf("statusCode" to mediaResult.status.statusCode),
-                    )
-                }
-            }
-        } catch (_: Exception) {
-            result.error(
-                "CAST_TRACK_SELECTION_FAILED",
-                "Unable to change Cast media tracks.",
-                null,
-            )
-        }
-    }
-
-    private fun parseTrackId(call: MethodCall): Long? {
-        val raw = call.argument<Any>("trackId") ?: return null
-        return when (raw) {
-            is Number -> raw.toLong()
-            is String -> raw.toLongOrNull()
-            else -> null
-        }
-    }
-
-    private fun findTrack(id: Long, type: Int): MediaTrack? =
-        remoteMediaClient?.mediaInfo?.mediaTracks
-            ?.firstOrNull { it.id == id && it.type == type }
-
-    private fun activeTrackIdsExcluding(type: Int): List<Long> {
-        val tracks = remoteMediaClient?.mediaInfo?.mediaTracks.orEmpty()
-        val active = remoteMediaClient?.mediaStatus?.activeTrackIds?.toSet().orEmpty()
-        val excluded = tracks.filter { it.type == type }.map { it.id }.toSet()
-        return active.filterNot { excluded.contains(it) }
-    }
-
-    private fun runRemoteCommand(
-        result: MethodChannel.Result,
-        command: (RemoteMediaClient) ->
-            com.google.android.gms.common.api.PendingResult<RemoteMediaClient.MediaChannelResult>,
-    ) {
-        val client = connectedClient(result) ?: return
-        try {
-            command(client).setResultCallback { mediaResult ->
-                if (mediaResult.status.isSuccess) {
-                    captureRemotePosition()
-                    updatePlaybackState()
-                    result.success(snapshot())
-                    emitSnapshot()
-                } else {
-                    result.error(
-                        "CAST_COMMAND_FAILED",
-                        "The Cast receiver rejected the command.",
-                        mapOf("statusCode" to mediaResult.status.statusCode),
-                    )
-                }
-            }
-        } catch (_: Exception) {
-            result.error("CAST_COMMAND_FAILED", "Unable to control the Cast receiver.", null)
-        }
-    }
-
-    private fun disconnect(result: MethodChannel.Result) {
-        val context = castContext
-        if (context == null) {
-            result.success(snapshot())
-            return
-        }
-        captureRemotePosition()
-        try {
-            context.sessionManager.endCurrentSession(true)
-            result.success(snapshot())
-        } catch (_: Exception) {
-            result.error("CAST_DISCONNECT_FAILED", "Unable to end the Cast session.", null)
-        }
-    }
-
-    private fun connectedClient(result: MethodChannel.Result): RemoteMediaClient? {
-        val session = castContext?.sessionManager?.currentCastSession
-        val client = session?.takeIf { it.isConnected }?.remoteMediaClient
-        if (client == null) {
-            result.error("CAST_SESSION_LOST", "No active Cast session.", null)
-            return null
-        }
-        if (client !== remoteMediaClient) bindSession(session)
-        return client
+    private fun disableSubtitles(call: MethodCall, result: MethodChannel.Result) {
+        val receiver = controlLedger(call, result) ?: return
+        val active = activeTrackIdsExcluding(receiver.client, MediaTrack.TYPE_TEXT).toLongArray()
+        startPhysicalOperation(bridge, receiver, result) { it.setActiveMediaTracks(active) }
     }
 
     private fun bindSession(session: CastSession) {
+        if (!ownsSession(session) || !session.isConnected || isRetired(session)) return
+        val client = session.remoteMediaClient ?: return
         unbindRemoteClient()
-        observedMediaSessionId = null
-        observedMediaContentId = null
-        deviceName = session.castDevice?.friendlyName
-        val client = session.remoteMediaClient
+        attachedSession = session
+        prospectiveSession = null
         remoteMediaClient = client
-        client?.registerCallback(remoteCallback)
-        client?.addProgressListener(progressListener, PROGRESS_PERIOD_MS)
-        client?.requestStatus()
-        lastErrorCode = null
-        state = DebrifyCastState.CONNECTED
-        captureRemotePosition()
-        updatePlaybackState()
-        emitSnapshot()
+        ledger = ledgerFor(session, client)
+        bridge.lastLedger = ledger
+        bridge.detachedErrorCode = null
+        val generation = ++bindingGeneration
+        val callback = object : RemoteMediaClient.Callback() {
+            override fun onStatusUpdated() {
+                if (!ownsCallback(client, generation)) return
+                ledger?.capture()
+                if (client.isPlaying || client.isPaused) {
+                    ledger?.mediaErrorActive = false
+                    if (ledger?.errorCode == "CAST_MEDIA_ERROR") ledger?.errorCode = null
+                }
+                bridge.emit()
+            }
+            override fun onMetadataUpdated() {
+                if (ownsCallback(client, generation)) bridge.emit()
+            }
+            override fun onMediaError(mediaError: com.google.android.gms.cast.MediaError) {
+                if (!ownsCallback(client, generation)) return
+                ledger?.capture()
+                ledger?.mediaErrorActive = true
+                ledger?.errorCode = "CAST_MEDIA_ERROR"
+                bridge.emit()
+            }
+        }
+        val progress = RemoteMediaClient.ProgressListener { _, _ ->
+            if (ownsCallback(client, generation)) bridge.emit()
+        }
+        boundCallback = callback
+        boundProgress = progress
+        client.registerCallback(callback)
+        client.addProgressListener(progress, PROGRESS_PERIOD_MS)
+        client.requestStatus()
+        bridge.emit()
     }
 
     private fun unbindRemoteClient() {
-        val client = remoteMediaClient ?: return
-        try {
-            client.unregisterCallback(remoteCallback)
-        } catch (_: Exception) {
-        }
-        try {
-            client.removeProgressListener(progressListener)
-        } catch (_: Exception) {
-        }
-        remoteMediaClient = null
-    }
-
-    private fun captureRemotePosition() {
-        val client = remoteMediaClient ?: return
-        try {
-            val currentSessionId = client.mediaStatus?.mediaSessionId?.toString()
-            val currentContentId = client.mediaInfo?.contentId
-            if (currentSessionId != observedMediaSessionId ||
-                currentContentId != observedMediaContentId
-            ) {
-                observedMediaSessionId = currentSessionId
-                observedMediaContentId = currentContentId
-                // Never let a new media identity inherit a previous duration.
-                lastPositionMs = null
-                lastDurationMs = null
-            }
-            val position = client.approximateStreamPosition
-            lastPositionMs = position.takeIf { it >= 0 }
-            val duration = client.mediaInfo?.streamDuration ?: MediaInfo.UNKNOWN_DURATION
-            lastDurationMs = duration.takeIf { it > 0 }
-            if (client.isPlaying) resumeShouldPlay = true
-            if (client.isPaused) resumeShouldPlay = false
-        } catch (_: Exception) {
-            // Unknown times remain invalid for a deferred startAtPercent seek.
-            lastDurationMs = null
-        }
-    }
-
-    private fun updatePlaybackState() {
+        ++bindingGeneration
         val client = remoteMediaClient
-        if (client == null) {
-            state = DebrifyCastState.DISCONNECTED
-            return
-        }
-
-        val status = client.mediaStatus
-        val finished =
-            status?.playerState == MediaStatus.PLAYER_STATE_IDLE &&
-                status.idleReason == MediaStatus.IDLE_REASON_FINISHED
-
-        if (finished) {
-            if (!endedForCurrentLoad) {
-                endedForCurrentLoad = true
-                endedSequence += 1
-            }
-            state = DebrifyCastState.ENDED
-            resumeShouldPlay = false
-            return
-        }
-
-        if (status != null &&
-            status.playerState != MediaStatus.PLAYER_STATE_IDLE &&
-            status.playerState != MediaStatus.PLAYER_STATE_UNKNOWN
-        ) {
-            endedForCurrentLoad = false
-        }
-
-        state = when {
-            runCatching { client.isPlaying }.getOrDefault(false) -> DebrifyCastState.PLAYING
-            runCatching { client.isPaused }.getOrDefault(false) -> DebrifyCastState.PAUSED
-            else -> DebrifyCastState.CONNECTED
-        }
-    }
-
-    private fun isCastAvailable(): Boolean {
-        val context = castContext ?: return false
-        val active = runCatching {
-            context.sessionManager.currentCastSession?.isConnected == true
-        }.getOrDefault(false)
-        if (active) return true
-        return runCatching {
-            context.castState != CastState.NO_DEVICES_AVAILABLE
-        }.getOrDefault(false)
-    }
-
-    private fun trackSnapshot(type: Int): List<Map<String, Any?>> {
-        val tracks = remoteMediaClient?.mediaInfo?.mediaTracks.orEmpty()
-        val active = remoteMediaClient?.mediaStatus?.activeTrackIds?.toSet().orEmpty()
-        return tracks
-            .filter { it.type == type }
-            .map { track ->
-                mapOf(
-                    "id" to track.id.toString(),
-                    "type" to when (track.type) {
-                        MediaTrack.TYPE_AUDIO -> "audio"
-                        MediaTrack.TYPE_TEXT -> "subtitle"
-                        MediaTrack.TYPE_VIDEO -> "video"
-                        else -> "unknown"
-                    },
-                    "language" to track.language,
-                    "label" to track.name,
-                    "mimeType" to track.contentType,
-                    // Cast MediaTrack does not expose codec as a first-class
-                    // field. Leave null rather than inferring from MIME/name.
-                    "codec" to null,
-                    "selected" to active.contains(track.id),
-                )
-            }
-    }
-
-    private fun selectedTrackId(type: Int): String? =
-        trackSnapshot(type)
-            .firstOrNull { it["selected"] == true }
-            ?.get("id")
-            ?.toString()
-
-    private fun snapshot(): Map<String, Any?> = mapOf(
-        "available" to isCastAvailable(),
-        "connected" to (remoteMediaClient != null),
-        "state" to state.wireValue,
-        "deviceName" to deviceName,
-        "positionMs" to lastPositionMs,
-        "durationMs" to lastDurationMs,
-        "resumePositionMs" to lastPositionMs,
-        "resumeShouldPlay" to resumeShouldPlay,
-        "errorCode" to lastErrorCode,
-        "availableAudioTracks" to trackSnapshot(MediaTrack.TYPE_AUDIO),
-        "availableSubtitleTracks" to trackSnapshot(MediaTrack.TYPE_TEXT),
-        "selectedAudioTrack" to selectedTrackId(MediaTrack.TYPE_AUDIO),
-        "selectedSubtitleTrack" to selectedTrackId(MediaTrack.TYPE_TEXT),
-        "endedSequence" to endedSequence,
-        // Load identity is transient: never log or store signed content IDs.
-        "mediaContentId" to remoteMediaClient?.mediaInfo?.contentId,
-        "mediaSessionId" to remoteMediaClient?.mediaStatus?.mediaSessionId,
-    )
-
-    private fun emitSnapshot() {
-        if (disposed) return
-        eventSink?.success(snapshot())
+        val callback = boundCallback
+        val progress = boundProgress
+        remoteMediaClient = null
+        boundCallback = null
+        boundProgress = null
+        if (client != null && callback != null) runCatching { client.unregisterCallback(callback) }
+        if (client != null && progress != null) runCatching { client.removeProgressListener(progress) }
     }
 
     fun dispose() {
         if (disposed) return
-        captureRemotePosition()
         disposed = true
         unbindRemoteClient()
+        attachedSession = null
+        prospectiveSession = null
+        ledger = null
         castContext?.let { context ->
             runCatching { context.removeCastStateListener(castStateListener) }
-            runCatching {
-                context.sessionManager.removeSessionManagerListener(
-                    sessionListener,
-                    CastSession::class.java,
-                )
-            }
+            runCatching { context.sessionManager.removeSessionManagerListener(sessionListener, CastSession::class.java) }
         }
-        eventSink = null
-        eventChannel.setStreamHandler(null)
-        methodChannel.setMethodCallHandler(null)
+        if (bridge.owner === this) bridge.owner = null
+        // Engine channels, subscriber, epochs and physical ledger survive.
+        // Disposal alone is not evidence that a receiver command was cancelled.
         castContext = null
     }
 }

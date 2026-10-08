@@ -1,0 +1,215 @@
+{
+  "user_update": "At final merge ready PRs and compile; revokes earlier no-merge/no-build for final integration only. App test/analyze bans remain until separately authorized.",
+  "open_prs": [
+    {
+      "baseRefName": "main",
+      "files": [
+        {
+          "path": "lib/models/stremio_tv/stremio_tv_channel.dart",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "lib/screens/settings/stremio_tv_channel_order_page.dart",
+          "additions": 142,
+          "deletions": 0
+        },
+        {
+          "path": "lib/screens/settings/stremio_tv_settings_page.dart",
+          "additions": 20,
+          "deletions": 0
+        },
+        {
+          "path": "lib/screens/stremio_tv/stremio_tv_service.dart",
+          "additions": 26,
+          "deletions": 0
+        },
+        {
+          "path": "lib/services/storage_service.dart",
+          "additions": 22,
+          "deletions": 0
+        }
+      ],
+      "headRefName": "feature/stremio-tv-channel-order",
+      "headRefOid": "b0c43b92f40d525d4f882535e66aa119cf6495e0",
+      "mergeStateStatus": "CLEAN",
+      "mergeable": "MERGEABLE",
+      "number": 1,
+      "title": "feat(stremio-tv): add persistent manual channel ordering"
+    },
+    {
+      "baseRefName": "main",
+      "files": [
+        {
+          "path": "lib/screens/stremio_tv/widgets/stremio_tv_local_catalogs_dialog.dart",
+          "additions": 116,
+          "deletions": 10
+        }
+      ],
+      "headRefName": "feature/stremio-tv-remote-json-refresh",
+      "headRefOid": "28c87b3d2d568096db9b6d1219fd06c2d33f4c2f",
+      "mergeStateStatus": "CLEAN",
+      "mergeable": "MERGEABLE",
+      "number": 2,
+      "title": "feat(stremio-tv): refresh URL catalogs without reimporting"
+    },
+    {
+      "baseRefName": "main",
+      "files": [
+        {
+          "path": "android/app/build.gradle.kts",
+          "additions": 5,
+          "deletions": 0
+        },
+        {
+          "path": "android/app/src/main/AndroidManifest.xml",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "android/app/src/main/kotlin/com/debrify/app/MainActivity.kt",
+          "additions": 16,
+          "deletions": 0
+        },
+        {
+          "path": "android/app/src/main/kotlin/com/debrify/app/cast/CastMediaRequest.kt",
+          "additions": 149,
+          "deletions": 0
+        },
+        {
+          "path": "android/app/src/main/kotlin/com/debrify/app/cast/CastState.kt",
+          "additions": 10,
+          "deletions": 0
+        },
+        {
+          "path": "android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastManager.kt",
+          "additions": 445,
+          "deletions": 0
+        },
+        {
+          "path": "android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastOptionsProvider.kt",
+          "additions": 24,
+          "deletions": 0
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/debrify/app/cast/CastMediaRequestTest.kt",
+          "additions": 74,
+          "deletions": 0
+        },
+        {
+          "path": "lib/screens/video_player/widgets/controls.dart",
+          "additions": 59,
+          "deletions": 3
+        },
+        {
+          "path": "lib/screens/video_player/widgets/styled_dock.dart",
+          "additions": 51,
+          "deletions": 0
+        },
+        {
+          "path": "lib/screens/video_player_screen.dart",
+          "additions": 337,
+          "deletions": 5
+        },
+        {
+          "path": "lib/services/cast_service.dart",
+          "additions": 341,
+          "deletions": 0
+        },
+        {
+          "path": "lib/services/video_player_launcher.dart",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "test/services/cast_service_test.dart",
+          "additions": 176,
+          "deletions": 0
+        }
+      ],
+      "headRefName": "feature/google-cast-phase1",
+      "headRefOid": "ea1e17a1bb2e1dec80d683b2e0d77597e162b428",
+      "mergeStateStatus": "CLEAN",
+      "mergeable": "MERGEABLE",
+      "number": 3,
+      "title": "feat(android): Google Cast Phase 1 sender integration"
+    },
+    {
+      "baseRefName": "feature/google-cast-phase1",
+      "files": [
+        {
+          "path": "android/app/src/main/kotlin/com/debrify/app/cast/CastMediaRequest.kt",
+          "additions": 48,
+          "deletions": 0
+        },
+        {
+          "path": "android/app/src/main/kotlin/com/debrify/app/cast/CastState.kt",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastManager.kt",
+          "additions": 191,
+          "deletions": 12
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/debrify/app/cast/CastMediaRequestTest.kt",
+          "additions": 48,
+          "deletions": 0
+        },
+        {
+          "path": "lib/screens/video_player/widgets/controls.dart",
+          "additions": 18,
+          "deletions": 0
+        },
+        {
+          "path": "lib/screens/video_player/widgets/player_menu_panel.dart",
+          "additions": 5,
+          "deletions": 2
+        },
+        {
+          "path": "lib/screens/video_player/widgets/styled_dock.dart",
+          "additions": 15,
+          "deletions": 0
+        },
+        {
+          "path": "lib/screens/video_player_screen.dart",
+          "additions": 1702,
+          "deletions": 163
+        },
+        {
+          "path": "lib/services/cast_phase2_policy.dart",
+          "additions": 458,
+          "deletions": 0
+        },
+        {
+          "path": "lib/services/cast_service.dart",
+          "additions": 188,
+          "deletions": 1
+        },
+        {
+          "path": "test/player_menu_panel_test.dart",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "test/services/cast_phase2_policy_test.dart",
+          "additions": 444,
+          "deletions": 0
+        },
+        {
+          "path": "test/services/cast_service_test.dart",
+          "additions": 216,
+          "deletions": 2
+        }
+      ],
+      "headRefName": "feature/google-cast-phase2",
+      "headRefOid": "7f288ecc79def0eb5a7439abc3fc5a74ec39772e",
+      "mergeStateStatus": "CLEAN",
+      "mergeable": "MERGEABLE",
+      "number": 4,
+      "title": "feat(android): Google Cast Phase 2 remote continuity and tracking"
+    }
+  ],
+  "planned_order": "PR4 into phase1, PR1/PR2 into main, then PR3 carrying both Cast phases into main; reassess dependencies/mergeability at each step. Android compile uses existing workflow only after closure/merges."
+}

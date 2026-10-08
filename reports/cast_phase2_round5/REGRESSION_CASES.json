@@ -1,0 +1,1105 @@
+{
+  "I01": {
+    "name": "slow A, fast B intent: stale A never commits",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 32,
+    "initial": "A physical LOAD active, B newer intent",
+    "adversarial": "Complete obsolete A before B",
+    "expected": "A superseded; B commits; physical concurrency remains one",
+    "assertions": [
+      "expect((await a).outcome, CastLoadOutcome.superseded);",
+      "expect(f.started, ['A']);",
+      "expect(f.started, ['A', 'B']);",
+      "expect((await b).outcome, CastLoadOutcome.committed);",
+      "expect(f.maxRunning, 1);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "I02": {
+    "name": "late provider A cannot enqueue after B has begun",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 49,
+    "initial": "A provider ticket captured, B already current",
+    "adversarial": "Late provider A submits with old ticket",
+    "expected": "A never reaches gateway; B retains authority",
+    "assertions": [
+      "expect(aResult.outcome, CastLoadOutcome.superseded);",
+      "expect(f.started, ['B']);",
+      "expect((await bResult).committed, true);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "I03": {
+    "name": "A in flight, B/C queued: B settles, only C is dispatched",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 62,
+    "initial": "A active; B then C queued",
+    "adversarial": "Resolve A after replacing B with C",
+    "expected": "Only C dispatches after A; B settles superseded",
+    "assertions": [
+      "expect((await af).outcome, CastLoadOutcome.superseded);",
+      "expect((await bf).outcome, CastLoadOutcome.superseded);",
+      "expect(f.started, ['A', 'C']);",
+      "expect((await cf).committed, true);",
+      "expect(f.maxRunning, 1);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "I04": {
+    "name": "current rejected load never promotes an older request",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 491,
+    "initial": "Current A rejected by identity verification",
+    "adversarial": "Introduce subsequent current request",
+    "expected": "Rejected A cannot be promoted as rollback or authority",
+    "assertions": [
+      "expect((await old).outcome, CastLoadOutcome.superseded);",
+      "expect(f.started, ['A', 'B']);",
+      "expect((await newer).outcome, CastLoadOutcome.failed);",
+      "expect(q.isCurrent(oldTicket), false);",
+      "expect(q.isCurrent(currentTicket), true);",
+      "expect(f.maxRunning, 1);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "I05": {
+    "name": "cancelled ticket never invokes deferred LOAD factory",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 383,
+    "initial": "Captured ticket explicitly invalidated",
+    "adversarial": "Submit deferred physical factory",
+    "expected": "Factory not invoked, caller settles superseded",
+    "assertions": [
+      "expect(response.outcome, CastLoadOutcome.superseded);",
+      "expect(invoked, 0);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "I06": {
+    "name": "local source fallback preserves local telemetry and ownership",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 124,
+    "initial": "Local owner and local-only file source",
+    "adversarial": "Attempt incompatible Cast transfer then cancel",
+    "expected": "Local telemetry and recovery ownership remain local",
+    "assertions": [
+      "expect(CastSourceCompatibility.classify(url: 'file:///local.mp4').canAttempt,",
+      "expect(ownership.isLocal, isTrue);",
+      "expect(ownership.acceptsLocalTelemetry, isTrue);",
+      "expect(ownership.owner, PlaybackOwner.local);",
+      "expect(StremioTvNextRecovery.canResumeLocal(ownership.owner, true), isTrue);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_phase2_policy.dart",
+        "symbol": "PlaybackOwnershipController"
+      },
+      {
+        "file": "lib/services/cast_phase2_policy.dart",
+        "symbol": "CastSourceCompatibility"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "L07": {
+    "name": "reentrant completion submits later request only after old completion",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 188,
+    "initial": "Active A; caller completion may enqueue B reentrantly",
+    "adversarial": "Complete A and submit new LOAD",
+    "expected": "Physical A settles before B starts; max one",
+    "assertions": [
+      "expect(f.started, ['A', 'B']);",
+      "expect((await later).committed, true);",
+      "expect(f.maxRunning, 1);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "L08": {
+    "name": "pending replacement within same generation dispatches only final",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 321,
+    "initial": "A active and same-generation pending B",
+    "adversarial": "Replace queued B with final C",
+    "expected": "B settles superseded, only final pending command dispatches",
+    "assertions": [
+      "expect((await firstQueued).outcome, CastLoadOutcome.superseded);",
+      "expect((await active).committed, true);",
+      "expect(f.started, ['busy', 'latest']);",
+      "expect((await lastQueued).committed, true);",
+      "expect(f.maxRunning, 1);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "L09": {
+    "name": "timeout settles caller without releasing physical exclusion",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 160,
+    "initial": "A underlying native Future unresolved, B pending",
+    "adversarial": "Expire logical deadline using virtual clock",
+    "expected": "Caller fails but physical exclusion remains until native ACK",
+    "assertions": [
+      "expect(first!.outcome, CastLoadOutcome.failed);",
+      "expect(q.isBlockedOnReceiver, isTrue);",
+      "expect(f.started, ['A']);",
+      "expect(f.started, ['A', 'B']);",
+      "expect(second!.committed, isTrue);",
+      "expect(f.maxRunning, 1);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "L10": {
+    "name": "stale physical ACK is observed but cannot become logical commit",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 291,
+    "initial": "A obsolete after B intent",
+    "adversarial": "Late physical ACK for A",
+    "expected": "Observer sees reality; logical A never commits",
+    "assertions": [
+      "expect((await first).outcome, CastLoadOutcome.superseded);",
+      "expect(observed, ['$firstTicket:A']);",
+      "expect((await later).committed, true);",
+      "expect(f.maxRunning, 1);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "L11": {
+    "name": "A fails while newer B is pending; B drains",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 81,
+    "initial": "A physical active with newer B pending",
+    "adversarial": "Complete A with transport error",
+    "expected": "A superseded; B drains only after physical A returns",
+    "assertions": [
+      "expect((await af).outcome, CastLoadOutcome.superseded);",
+      "expect((await bf).committed, true);",
+      "expect(f.maxRunning, 1);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "L12": {
+    "name": "dispose settles physical and queued callers exactly once",
+    "test_file": "test/services/cast_load_coordinator_test.dart",
+    "test_line": 205,
+    "initial": "Active and pending LOAD callers",
+    "adversarial": "Dispose coordinator before physical reply",
+    "expected": "Callers settle cancelled exactly once; no later dispatch",
+    "assertions": [
+      "expect((await af).outcome, CastLoadOutcome.superseded);",
+      "expect((await bf).outcome, CastLoadOutcome.cancelled);",
+      "expect(f.started, ['A']);",
+      "expect(cr.outcome, CastLoadOutcome.cancelled);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_load_coordinator.dart",
+        "symbol": "CastLoadCoordinator"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "C13": {
+    "name": "manual seek validates exact committed URL media ID and epoch",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 136,
+    "initial": "Accepted P URL/SID/epoch",
+    "adversarial": "Seek with wrong URL or SID, then exact identity",
+    "expected": "Wrong seeks do not dispatch; exact lease accompanies native seek",
+    "assertions": [
+      "expect(await f.service.seekForCommittedMedia(const Duration(seconds: 40),",
+      "expect(await f.service.seekForCommittedMedia(const Duration(seconds: 40),",
+      "expect(args['expectedContentId'], pUrl);",
+      "expect(args['expectedMediaSessionId'], 1);",
+      "expect(args['expectedSessionEpoch'], 'session-1');",
+      "expect((await seek)!.position, const Duration(seconds: 40));"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "C14": {
+    "name": "deferred percent seek cancels when navigation supersedes ticket",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 158,
+    "initial": "Prepared 50% automatic seek with old ticket",
+    "adversarial": "New navigation cancels start-percent gate",
+    "expected": "No claim and no native seek for stale intent",
+    "assertions": [
+      "expect(gate.claim(contentId: aUrl, mediaSessionId: 2,",
+      "expect(await f.service.seekForCommittedMedia(const Duration(seconds: 50),",
+      "expect(f.native.count('seek'), 0);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "C15": {
+    "name": "a manual seek never dispatches while LOAD is physical",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 176,
+    "initial": "P accepted while A LOAD physically outstanding",
+    "adversarial": "User seeks P before LOAD reply",
+    "expected": "Seek never reaches receiver during physical LOAD",
+    "assertions": [
+      "expect(await f.service.seekForCommittedMedia(const Duration(seconds: 20),",
+      "expect(f.native.count('seek'), 0);",
+      "expect((await load).committed, isTrue);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "C16": {
+    "name": "later LOAD waits for previously dispatched seek physical ACK",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 191,
+    "initial": "Physical P seek outstanding",
+    "adversarial": "Submit newer B LOAD before seek ACK",
+    "expected": "B waits for actual seek completion",
+    "assertions": [
+      "expect(f.native.count('loadMedia'), 0);",
+      "expect(await seek, isNull);",
+      "expect(f.native.count('loadMedia'), 1);",
+      "expect((await load).committed, isTrue);",
+      "expect(f.service.snapshot.mediaContentId, bUrl);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "C17": {
+    "name": "timed-out seek cannot commit late and still excludes next LOAD",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 213,
+    "initial": "One-second virtual deadline on physical seek",
+    "adversarial": "Timeout seek, then begin B before late ACK",
+    "expected": "Late seek cannot rewrite accepted clock and still excludes B",
+    "assertions": [
+      "expect(callerSettled, isTrue);",
+      "expect(response, isNull);",
+      "expect(f.service.receiverLoadBlocked, isTrue);",
+      "expect(f.native.count('loadMedia'), 0);",
+      "expect(f.service.position, const Duration(seconds: 12));",
+      "expect(f.native.count('loadMedia'), 1);",
+      "expect(committed!.committed, isTrue);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "C18": {
+    "name": "late pause ACK and event never rewrite clock in either channel order",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 247,
+    "initial": "Physical pause for accepted P pending",
+    "adversarial": "New navigation begins before old pause ACK",
+    "expected": "Old ACK cannot rewrite accepted playback clock",
+    "assertions": [
+      "final rejected = expectLater(pause, throwsA(isA<CastException>()));",
+      "expect(f.service.position, const Duration(seconds: 12));",
+      "expect(f.service.state, CastPlaybackState.playing);",
+      "expect(f.service.state, CastPlaybackState.playing);",
+      "expect(f.service.position, const Duration(seconds: 12));",
+      "expect(f.service.receiverRecoveryRequired, isTrue);",
+      "expect(f.service.hasLoadInFlight, isFalse);",
+      "expect(f.service.adoptVerifiedReceiverIdentity(fresh: fresh,",
+      "expect(f.service.receiverRecoveryRequired, isFalse);",
+      "expect(f.service.position, const Duration(seconds: 90));",
+      "expect(f.service.state, CastPlaybackState.paused);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "S19": {
+    "name": "fresh matching receiver identity adopts without LOAD",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 283,
+    "initial": "Fresh native P snapshot matching screen URL",
+    "adversarial": "Adopt using current navigation ticket",
+    "expected": "Exact identity accepted without native LOAD",
+    "assertions": [
+      "expect(service.adoptVerifiedReceiverIdentity(fresh: fresh,",
+      "expect(native.count('loadMedia'), 0);",
+      "expect(service.snapshot.mediaSessionId, 1);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "S20": {
+    "name": "restored receiver with mismatching URL cannot adopt",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 296,
+    "initial": "Fresh P receiver snapshot",
+    "adversarial": "Request adoption for different content URL",
+    "expected": "Adoption denied; no LOAD or accepted identity fabrication",
+    "assertions": [
+      "expect(f.service.adoptVerifiedReceiverIdentity(fresh: await f.service.refresh(),",
+      "expect(f.native.count('loadMedia'), 0);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "S21": {
+    "name": "matching restored URL with wrong media session cannot adopt",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 305,
+    "initial": "Current P media session 1",
+    "adversarial": "Use restored same URL with wrong media session",
+    "expected": "Adoption denied for mismatching SID",
+    "assertions": [
+      "expect(f.service.adoptVerifiedReceiverIdentity(fresh: wrong,"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "S22": {
+    "name": "matching restored URL and media ID with wrong epoch cannot adopt",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 314,
+    "initial": "Current P epoch session-1",
+    "adversarial": "Use restored same URL/SID from another epoch",
+    "expected": "Adoption denied despite reused URL and SID",
+    "assertions": [
+      "expect(f.service.adoptVerifiedReceiverIdentity(fresh: wrong,"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "S23": {
+    "name": "retired session callback cannot disconnect new session",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 323,
+    "initial": "Receiver replaced session-1 with session-2",
+    "adversarial": "Delayed old epoch disconnection callback",
+    "expected": "New session remains connected and authoritative",
+    "assertions": [
+      "expect(f.service.snapshot.sessionEpoch, 'session-2');",
+      "expect(f.service.connected, isTrue);",
+      "expect(f.service.snapshot.sessionEpoch, 'session-2');"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "S24": {
+    "name": "old bridge LOAD ACK after recreation cannot commit",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 334,
+    "initial": "A physical LOAD on bridge-1",
+    "adversarial": "Recreate bridge/session before A ACK",
+    "expected": "Old bridge ACK cannot commit or replace bridge-2",
+    "assertions": [
+      "expect((await load).committed, isFalse);",
+      "expect(f.service.snapshot.bridgeInstanceId, 'bridge-2');",
+      "expect(f.service.snapshot.sessionEpoch, 'session-2');"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "R25": {
+    "name": "superseded physical A ACK is observed without committing A",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 350,
+    "initial": "P accepted, A physical active, B supersedes",
+    "adversarial": "Late successful physical A arrives",
+    "expected": "Wire A observed; UI/tracking clock P frozen; recovery explicit",
+    "assertions": [
+      "expect(f.service.receiverRecoveryRequired, isTrue);",
+      "expect(f.service.snapshot.mediaContentId, pUrl);",
+      "expect(f.service.position, const Duration(seconds: 12));",
+      "expect((await f.service.refresh()).mediaContentId, aUrl);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "R26": {
+    "name": "current timed-out A late ACK enters recovery with frozen P clock",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 360,
+    "initial": "P accepted with A current LOAD and virtual deadline",
+    "adversarial": "Timeout caller then acknowledge A at 87 seconds",
+    "expected": "Recovery required; P remains 12 seconds; no resurrected commit",
+    "assertions": [
+      "expect(outcome!.outcome, CastLoadOutcome.failed);",
+      "expect(f.service.receiverLoadBlocked, isTrue);",
+      "expect(f.service.receiverRecoveryRequired, isTrue);",
+      "expect(f.service.position, const Duration(seconds: 12));",
+      "expect(f.service.hasLoadInFlight, isFalse);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "R27": {
+    "name": "verified B commit clears recovery after late A and failed B provider",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 384,
+    "initial": "Receiver divergence from stale A; B provider failed",
+    "adversarial": "Later verified B LOAD succeeds",
+    "expected": "Recovery clears only for confirmed B identity",
+    "assertions": [
+      "expect(f.service.receiverRecoveryRequired, isTrue);",
+      "expect((await load).committed, isTrue);",
+      "expect(f.service.receiverRecoveryRequired, isFalse);",
+      "expect(f.service.snapshot.mediaContentId, bUrl);",
+      "expect(f.service.state, CastPlaybackState.connected);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "R28": {
+    "name": "provisional event does not reject earlier valid LOAD ACK",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 401,
+    "initial": "A LOAD pending; provisional A event revision4 at30s",
+    "adversarial": "Older matching ACK revision3 at29s",
+    "expected": "A commits with newest matching wire clock30s",
+    "assertions": [
+      "expect(f.service.position, const Duration(seconds: 12));",
+      "expect((await load).committed, isTrue);",
+      "expect(f.service.snapshot.mediaContentId, aUrl);",
+      "expect(f.service.position, const Duration(seconds: 30));"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "R29": {
+    "name": "bridge with no session retires old callbacks then reconnects",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 418,
+    "initial": "Old bridge-1/session-1 connected",
+    "adversarial": "New bridge-2 disconnected, old callback, then reconnect",
+    "expected": "Old revision999 cannot revive retired bridge; new epoch accepted",
+    "assertions": [
+      "expect(f.service.connected, isFalse);",
+      "expect(f.service.connected, isFalse);",
+      "expect(f.service.connected, isTrue);",
+      "expect(f.service.snapshot.sessionEpoch, 'session-2');"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "R30": {
+    "name": "proven disconnect clears recovery and preserves accepted resume",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 432,
+    "initial": "Divergent receiver A at87s, accepted P clock12s",
+    "adversarial": "Confirmed disconnect snapshot",
+    "expected": "Recovery clears; resume retains accepted P position/play intent",
+    "assertions": [
+      "expect(f.service.receiverRecoveryRequired, isTrue);",
+      "expect(f.service.receiverRecoveryRequired, isFalse);",
+      "expect(f.service.connected, isFalse);",
+      "expect(f.service.snapshot.resumePosition, const Duration(seconds: 12));",
+      "expect(f.service.snapshot.resumeShouldPlay, isTrue);",
+      "expect(f.service.state, CastPlaybackState.disconnected);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "T31": {
+    "name": "language policy reads committed remote tracks after LOAD",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 446,
+    "initial": "New A LOAD awaiting remote tracks",
+    "adversarial": "ACK contains English and Spanish subtitle IDs",
+    "expected": "Policy reads committed remote list, chooses English actual ID",
+    "assertions": [
+      "expect((await load).committed, isTrue);",
+      "expect(CastLanguagePolicy.chooseSubtitle(tracks: f.service.availableSubtitleTracks,"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      },
+      {
+        "file": "lib/services/cast_phase2_policy.dart",
+        "symbol": "CastLanguagePolicy"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "T32": {
+    "name": "manual OFF wins over delayed automatic language preference",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 463,
+    "initial": "Automatic language preference Future pending",
+    "adversarial": "User explicitly disables subtitles before preference returns",
+    "expected": "Manual OFF remains authoritative and selection is null",
+    "assertions": [
+      "expect(await choice, isNull);",
+      "expect(f.service.sessionSubtitlesDisabled, isTrue);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      },
+      {
+        "file": "lib/services/cast_phase2_policy.dart",
+        "symbol": "CastLanguagePolicy"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "T33": {
+    "name": "stale embedded subtitle result cannot change newly committed media",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 478,
+    "initial": "P subtitle selection physical command pending",
+    "adversarial": "Navigate and commit B before old result applies",
+    "expected": "Old subtitle cannot change B tracks or remembered language",
+    "assertions": [
+      "final stale = expectLater(selection, throwsA(isA<CastException>()));",
+      "expect((await load).committed, isTrue);",
+      "expect(f.service.selectedSubtitleTrack, isNull);",
+      "expect(f.service.sessionSubtitleLanguage, isNull);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      },
+      {
+        "file": "lib/services/cast_phase2_policy.dart",
+        "symbol": "CastLanguagePolicy"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "T34": {
+    "name": "prepared WebVTT request leaves committed language intent untouched",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 496,
+    "initial": "P and Spanish language intent accepted",
+    "adversarial": "Prepare addon English WebVTT replacement without commit",
+    "expected": "Existing request/list/language untouched; VTT policy accepts candidate",
+    "assertions": [
+      "expect(CastSubtitleSupport.classify(candidate.textTracks.single.url).supported,",
+      "expect(previous.textTracks, isEmpty);",
+      "expect(f.service.availableSubtitleTracks, isEmpty);",
+      "expect(f.service.sessionSubtitleLanguage, 'es');"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      },
+      {
+        "file": "lib/services/cast_phase2_policy.dart",
+        "symbol": "CastLanguagePolicy"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "T35": {
+    "name": "rejected addon replacement retains previous track intent",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 510,
+    "initial": "P accepted with Spanish intent and staged addon replacement",
+    "adversarial": "Native replacement returns failure",
+    "expected": "Logical transaction rolls back; prior identity/language/tracks retained",
+    "assertions": [
+      "expect((await load).outcome, CastLoadOutcome.failed);",
+      "expect(identical(transaction.rollback(), previous), isTrue);",
+      "expect(f.service.snapshot.mediaContentId, pUrl);",
+      "expect(f.service.sessionSubtitleLanguage, 'es');",
+      "expect(f.service.availableSubtitleTracks, isEmpty);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      },
+      {
+        "file": "lib/services/cast_phase2_policy.dart",
+        "symbol": "CastLanguagePolicy"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "T36": {
+    "name": "obsolete subtitle LOAD cannot clear current transition authority",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 531,
+    "initial": "Obsolete subtitle A LOAD active and B queued",
+    "adversarial": "Late A ACK then verified B ACK",
+    "expected": "Obsolete result cannot clear B in-flight/current ticket authority",
+    "assertions": [
+      "expect((await old).committed, isFalse);",
+      "expect(f.service.isCurrentLoad(first), isFalse);",
+      "expect(f.service.isCurrentLoad(latest), isTrue);",
+      "expect(f.service.hasLoadInFlight, isTrue);",
+      "expect((await current).committed, isTrue);",
+      "expect(f.service.hasLoadInFlight, isFalse);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      },
+      {
+        "file": "lib/services/cast_phase2_policy.dart",
+        "symbol": "CastLanguagePolicy"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "E37": {
+    "name": "old tracker STOP uses A clock and settles before B starts",
+    "test_file": "test/services/cast_player_authority_test.dart",
+    "test_line": 155,
+    "initial": "{\"incoming\": \"ttB S2E1 0/40min\", \"outgoing\": \"ttA S1E4 70/100min\"}",
+    "adversarial": "capture immutable outgoing target; enqueue pending A STOP; enqueue B START; resolve A STOP",
+    "expected": "A STOP carries 70%, S1E4; B START does not dispatch while A STOP pending; B START follows A STOP at 0%",
+    "assertions": [
+      "expect(calls, ['stop:ttA:4:70.0']);",
+      "expect(calls, ['stop:ttA:4:70.0', 'start:ttB:0.0']);"
+    ],
+    "production": [
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_captureCastTrackingTarget",
+        "line": 599
+      },
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_stopCastTrackingForNavigation",
+        "line": 6422
+      },
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_queueTrackerEffect",
+        "line": 530
+      },
+      {
+        "file": "lib/services/cast_player_authority.dart",
+        "symbol": "CastPlayerTrackingTarget",
+        "line": 85
+      },
+      {
+        "file": "lib/services/cast_player_authority.dart",
+        "symbol": "CastPlayerTrackingQueue",
+        "line": 101
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "E38": {
+    "name": "ended continuation is rejected after newer navigation",
+    "test_file": "test/services/cast_player_authority_test.dart",
+    "test_line": 179,
+    "initial": "{\"initial\": \"generation1/bridge/session1/media7/A/ended5\", \"replacement\": \"generation2/media8/B\"}",
+    "adversarial": "capture ended ticket; await deferred completion; replace navigation/media; resolve pending completion",
+    "expected": "ticket invalid; zero old auto-advance effects",
+    "assertions": [
+      "expect(await effect, isFalse);",
+      "expect(advances, 0);"
+    ],
+    "production": [
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_castEffectTicket",
+        "line": 560
+      },
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_handleCastEnded",
+        "line": 15423
+      },
+      {
+        "file": "lib/services/cast_player_authority.dart",
+        "symbol": "CastPlayerEffectTicket",
+        "line": 25
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "E39": {
+    "name": "same URL and media session from another epoch has no authority",
+    "test_file": "test/services/cast_player_authority_test.dart",
+    "test_line": 197,
+    "initial": "{\"initialEpoch\": \"session1\", \"newEpoch\": \"session2\", \"same\": \"bridge/media7/A/generation1\"}",
+    "adversarial": "capture valid ticket; change only physical epoch; restore epoch then increase endedSequence",
+    "expected": "epoch change invalidates ticket; new ended sequence invalidates old continuation",
+    "assertions": [
+      "expect(ticket.isCurrent, isTrue);",
+      "expect(ticket.isCurrent, isFalse);",
+      "expect(ticket.isCurrent, isFalse);"
+    ],
+    "production": [
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_castMediaIdentity",
+        "line": 549
+      },
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_castEffectTicket",
+        "line": 560
+      },
+      {
+        "file": "lib/services/cast_player_authority.dart",
+        "symbol": "CastPlayerMediaIdentity",
+        "line": 3
+      },
+      {
+        "file": "lib/services/cast_player_authority.dart",
+        "symbol": "CastPlayerEffectTicket",
+        "line": 25
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "E40": {
+    "name": "threshold and ended claim one immutable effective completion",
+    "test_file": "test/services/cast_player_authority_test.dart",
+    "test_line": 208,
+    "initial": "{\"currentContent\": \"ttB Current show S2E3\", \"launchContent\": \"A excluded from target\"}",
+    "adversarial": "claim current effective completion; claim again from ended; reset on committed media change; claim rewatch",
+    "expected": "exactly one claim per current media; target retains effective B identity; new play may claim again",
+    "assertions": [
+      "expect(gate.claim(completion.key), isTrue);",
+      "expect(gate.claim(completion.key), isFalse);",
+      "expect(completion.imdbId, 'ttB');",
+      "expect(completion.episode, 3);",
+      "expect(gate.claim(completion.key), isTrue);"
+    ],
+    "production": [
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_captureCompletionTarget",
+        "line": 609
+      },
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_markCurrentEpisodeAsFinished",
+        "line": 11736
+      },
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_resetLocalCompletionState",
+        "line": 2081
+      },
+      {
+        "file": "lib/services/cast_player_authority.dart",
+        "symbol": "CastPlayerCompletionTarget",
+        "line": 110
+      },
+      {
+        "file": "lib/services/cast_player_authority.dart",
+        "symbol": "CastPlayerCompletionGate",
+        "line": 121
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "E41": {
+    "name": "disconnect opens committed B before seeking and restoring play",
+    "test_file": "test/services/cast_player_authority_test.dart",
+    "test_line": 220,
+    "initial": "{\"committedCast\": \"B\", \"parkedLocal\": \"A\", \"resumeSeconds\": 24, \"shouldPlay\": true}",
+    "adversarial": "execute production restore orchestration; open B; seek B to24; play B",
+    "expected": "open:B precedes seek:B:24; play:B:true follows seek; successful restore result",
+    "assertions": [
+      "expect(restored, isTrue);",
+      "expect(localUrl, 'B');",
+      "expect(calls, ['open:B', 'seek:B:24', 'play:B:true']);"
+    ],
+    "production": [
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_restoreLocalAfterCast",
+        "line": 15980
+      },
+      {
+        "file": "lib/services/cast_player_authority.dart",
+        "symbol": "CastPlayerRestorePlan",
+        "line": 127
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "E42": {
+    "name": "foreground resume rejects both transfers and Cast ownership",
+    "test_file": "test/services/cast_player_authority_test.dart",
+    "test_line": 236,
+    "initial": "{\"productionOwnership\": \"PlaybackOwnershipController\", \"sleepStopped\": false}",
+    "adversarial": "begin Cast transfer; foreground; commit Cast; foreground; begin local transfer; foreground; commit local; foreground",
+    "expected": "zero local starts in either transfer and Cast; one local start only after committed local ownership; sleep latch rejects local resume",
+    "assertions": [
+      "expect(localStarts, 0);",
+      "expect(localStarts, 1);",
+      "expect(CastPlayerRestorePlan.mayResumeLocal(localOwnsPlayback: true,"
+    ],
+    "production": [
+      {
+        "file": "lib/screens/video_player_screen.dart",
+        "symbol": "_resumeFromBackground",
+        "line": 13218
+      },
+      {
+        "file": "lib/services/cast_player_authority.dart",
+        "symbol": "CastPlayerRestorePlan",
+        "line": 127
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "P43": {
+    "name": "Phase 1 load initializes before epoch capture and preserves errors",
+    "test_file": "test/services/cast_service_coordination_test.dart",
+    "test_line": 552,
+    "initial": "Fresh uninitialized Phase1 public service",
+    "adversarial": "Call load, invalid URL, then connect",
+    "expected": "Initialization precedes epoch capture; specific errors preserved; no invalid LOAD",
+    "assertions": [
+      "expect(native.count('loadMedia'), 1);",
+      "expect((await first).mediaContentId, aUrl);",
+      "await expectLater(invalid, throwsA(isA<CastException>().having(",
+      "expect(native.count('loadMedia'), 1);",
+      "expect(await service.connect(), isTrue);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "P44": {
+    "name": "split audio/video stream cannot masquerade as direct receiver media",
+    "test_file": "test/services/cast_stream_security_round5_test.dart",
+    "test_line": 32,
+    "initial": "Receiver sender given split audio/video URLs",
+    "adversarial": "Classify split MPD/audio then multiplexed/unknown stream",
+    "expected": "Split blocked; supported multiplexed and unknown codec policy preserved",
+    "assertions": [
+      "expect(split.kind, CastSourceCompatibilityKind.unsupportedAudioVideoLayout);",
+      "expect(split.canAttempt, isFalse);",
+      "expect(split.reason, contains('Separate audio/video'));",
+      "expect(multiplexed.kind, CastSourceCompatibilityKind.supported);",
+      "expect(multiplexed.canAttempt, isTrue);",
+      "expect(unknown.kind, CastSourceCompatibilityKind.unknown);",
+      "expect(unknown.canAttempt, isTrue);"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_phase2_policy.dart",
+        "symbol": "CastSourceCompatibility"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  },
+  "P45": {
+    "name": "credential headers are rejected before any native LOAD transmission",
+    "test_file": "test/services/cast_stream_security_round5_test.dart",
+    "test_line": 49,
+    "initial": "Observed previous native media snapshot; request with protected Authorization header (no claim of accepted/adopted ownership)",
+    "adversarial": "Invoke public load with secret header",
+    "expected": "Specific unsupported-headers failure; no native LOAD or secret transmission",
+    "assertions": [
+      "await expectLater(service.load(request), throwsA(isA<CastException>()",
+      "expect(transport.methods, isNot(contains('loadMedia')));",
+      "expect(transport.arguments.any((value) =>",
+      "expect(service.snapshot.mediaContentId, 'https://media.example/previous.mp4');"
+    ],
+    "production": [
+      {
+        "file": "lib/services/cast_service.dart",
+        "symbol": "CastService"
+      }
+    ],
+    "status": "AUTHORED / NOT RUN",
+    "limits": "Static authorship/source audit only; actual execution, SDK runtime and device behavior unverified."
+  }
+}

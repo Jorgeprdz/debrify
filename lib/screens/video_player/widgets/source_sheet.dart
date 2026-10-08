@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import '../../../services/source_selection_diagnostics.dart';
 
@@ -22,6 +23,13 @@ class SourceSheet extends StatefulWidget {
   final int currentSourceIndex;
   final Future<String?> Function(Torrent) resolveSource;
   final void Function(int index, String resolvedUrl) onSourceSelected;
+  // Optional transactional callbacks. Legacy LOCAL callers remain unchanged.
+  final int? Function(int index)? onSelectionIntent;
+  final Future<String?> Function(Torrent source, int? ticket)?
+      resolveSourceWithIntent;
+  final void Function(int index, String resolvedUrl, int? ticket)?
+      onResolvedSourceSelected;
+  final Object? Function()? currentPlaybackAuthority;
   final VoidCallback onClose;
   final SeriesSourceFetcher? seriesFetcher;
   final int? currentSeason;
@@ -34,6 +42,10 @@ class SourceSheet extends StatefulWidget {
     required this.currentSourceIndex,
     required this.resolveSource,
     required this.onSourceSelected,
+    this.onSelectionIntent,
+    this.resolveSourceWithIntent,
+    this.onResolvedSourceSelected,
+    this.currentPlaybackAuthority,
     required this.onClose,
     this.seriesFetcher,
     this.currentSeason,
@@ -61,6 +73,22 @@ class _AddonGroup {
 }
 
 class _SourceSheetState extends State<SourceSheet> {
+  int _sourceSelectionEpoch = 0;
+  int _fetchContextEpoch = 0;
+  Object? _lastPlaybackAuthority;
+  Object? _lastSelectionAuthority;
+
+  bool Function() _captureFetchContext() {
+    final epoch = _fetchContextEpoch;
+    final fetcher = widget.seriesFetcher;
+    final season = widget.currentSeason;
+    final episode = widget.currentEpisode;
+    final authority = widget.currentPlaybackAuthority?.call();
+    return () => mounted && epoch == _fetchContextEpoch &&
+        identical(fetcher, widget.seriesFetcher) &&
+        season == widget.currentSeason && episode == widget.currentEpisode &&
+        authority == widget.currentPlaybackAuthority?.call();
+  }
   bool _addonText = false;
   bool _addonLogos = false;
 
@@ -111,6 +139,8 @@ class _SourceSheetState extends State<SourceSheet> {
   @override
   void initState() {
     super.initState();
+    _lastPlaybackAuthority = widget.currentPlaybackAuthority?.call();
+    _lastSelectionAuthority = _lastPlaybackAuthority;
     _rebuildGroups(landOnCurrent: true);
     _loadAddonListing();
     _loadTextMode();
@@ -123,6 +153,7 @@ class _SourceSheetState extends State<SourceSheet> {
   }
 
   Future<void> _loadAddonListing() async {
+    final current = _captureFetchContext();
     final addonListing = widget.seriesFetcher?.listAddons;
     final engineListing = widget.seriesFetcher?.listEngines;
     if (addonListing == null && engineListing == null) {
@@ -148,7 +179,7 @@ class _SourceSheetState extends State<SourceSheet> {
     final enginesFuture = loadEngines();
     final addons = await addonsFuture;
     final engines = await enginesFuture;
-    if (!mounted) return;
+    if (!current()) return;
     setState(() {
       _allAddons = addons;
       _allEngines = engines;
@@ -161,6 +192,29 @@ class _SourceSheetState extends State<SourceSheet> {
   @override
   void didUpdateWidget(SourceSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final authority = widget.currentPlaybackAuthority?.call();
+    final contextChanged = !identical(oldWidget.seriesFetcher, widget.seriesFetcher) ||
+        oldWidget.currentSeason != widget.currentSeason ||
+        oldWidget.currentEpisode != widget.currentEpisode;
+    if (contextChanged || _lastPlaybackAuthority != authority) {
+      ++_fetchContextEpoch;
+      // The current pick itself may advance player authority. Preserve that
+      // selection on ordinary telemetry rebuilds; external navigation retires it.
+      if (contextChanged || _lastSelectionAuthority != authority) {
+        ++_sourceSelectionEpoch;
+        _resolvingIndex = null;
+        _errorMessage = null;
+        _lastSelectionAuthority = authority;
+      }
+      _fetchingGroups.clear();
+      _packProbing.clear();
+      _failedGroups.clear();
+      _fetchedGroups.clear();
+      _allAddons = const [];
+      _allEngines = const [];
+      _lastPlaybackAuthority = authority;
+      unawaited(_loadAddonListing());
+    }
     if (!identical(oldWidget.sources, widget.sources) ||
         oldWidget.currentSourceIndex != widget.currentSourceIndex ||
         oldWidget.currentSeason != widget.currentSeason ||
@@ -422,10 +476,28 @@ class _SourceSheetState extends State<SourceSheet> {
   }
 
   Future<void> _selectSource(_SourceEntry entry) async {
-    if (entry.originalIndex == widget.currentSourceIndex ||
-        _resolvingIndex != null) {
+    if ((entry.originalIndex == widget.currentSourceIndex &&
+         (_resolvingIndex == null || widget.onSelectionIntent == null)) ||
+        (_resolvingIndex != null && widget.onSelectionIntent == null)) {
       return;
     }
+    // Claim at the synchronous tap/keyboard event, BEFORE provider awaits.
+    final ticket = widget.onSelectionIntent?.call(entry.originalIndex);
+    final selectionAuthority = widget.currentPlaybackAuthority?.call();
+    _lastSelectionAuthority = selectionAuthority;
+    if (_lastPlaybackAuthority != selectionAuthority) {
+      // Retire providers from before this tap even without a parent rebuild.
+      ++_fetchContextEpoch;
+      _fetchingGroups.clear();
+      _packProbing.clear();
+      _failedGroups.clear();
+      _fetchedGroups.clear();
+      _allAddons = const [];
+      _allEngines = const [];
+      _lastPlaybackAuthority = selectionAuthority;
+      unawaited(_loadAddonListing());
+    }
+    final selectionEpoch = ++_sourceSelectionEpoch;
     logSourceSelection('player_manual_pick', source: entry.torrent,
         index: entry.originalIndex, previousIndex: widget.currentSourceIndex,
         season: widget.currentSeason, episode: widget.currentEpisode, player: 'mpv');
@@ -434,34 +506,40 @@ class _SourceSheetState extends State<SourceSheet> {
       _errorMessage = null;
     });
     try {
-      final url = await widget.resolveSource(entry.torrent);
-      if (!mounted) return;
+      final url = widget.resolveSourceWithIntent != null
+          ? await widget.resolveSourceWithIntent!(entry.torrent, ticket)
+          : await widget.resolveSource(entry.torrent);
+      if (!mounted || selectionEpoch != _sourceSelectionEpoch) return;
       if (url != null && url.isNotEmpty) {
         logSourceSelection('player_link_resolved', source: entry.torrent,
             index: entry.originalIndex, player: 'mpv');
-        widget.onSourceSelected(entry.originalIndex, url);
+        if (widget.onResolvedSourceSelected != null) {
+          widget.onResolvedSourceSelected!(entry.originalIndex, url, ticket);
+        } else {
+          widget.onSourceSelected(entry.originalIndex, url);
+        }
       } else {
         logSourceSelection('player_resolution_failed', source: entry.torrent,
             index: entry.originalIndex, player: 'mpv', reason: 'unavailable');
-        await _showResolutionError(
-          'Source unavailable — not cached or not a video',
-        );
+        await _showResolutionError('Source unavailable — not cached or not a video');
       }
     } catch (_) {
+      if (!mounted || selectionEpoch != _sourceSelectionEpoch) return;
       logSourceSelection('player_resolution_failed', source: entry.torrent,
           index: entry.originalIndex, player: 'mpv', reason: 'exception');
-      if (mounted) await _showResolutionError('Failed to resolve source');
+      await _showResolutionError('Failed to resolve source');
     }
   }
 
   Future<void> _showResolutionError(String message) async {
     if (!mounted) return;
+    final selectionEpoch = _sourceSelectionEpoch;
     setState(() {
       _resolvingIndex = null;
       _errorMessage = message;
     });
     await Future<void>.delayed(const Duration(seconds: 3));
-    if (mounted && _resolvingIndex == null) {
+    if (mounted && selectionEpoch == _sourceSelectionEpoch && _resolvingIndex == null) {
       setState(() => _errorMessage = null);
     }
   }
@@ -483,6 +561,7 @@ class _SourceSheetState extends State<SourceSheet> {
   /// has no packs to find). A null fetch marks the group failed and keeps
   /// the Fetch row up as the retry.
   Future<void> _fetchAddonGroup() async {
+    final current = _captureFetchContext();
     final fetcher = widget.seriesFetcher;
     if (fetcher == null || _groups.isEmpty) return;
     final group = _groups[_selectedGroup];
@@ -498,7 +577,7 @@ class _SourceSheetState extends State<SourceSheet> {
         widget.currentSeason ?? fetcher.season,
         widget.currentEpisode ?? fetcher.episode,
       );
-      if (!mounted) return;
+      if (!current()) return;
       setState(() {
         _fetchingGroups.remove(group.id);
         if (fetched == null) {
@@ -536,7 +615,9 @@ class _SourceSheetState extends State<SourceSheet> {
     List<Torrent>? episodes;
     final magnetIds = <String>[];
     for (final addonId in addonIds) {
+      if (!current()) return;
       final fetched = await search(addonId, s, e);
+      if (!current()) return;
       if (fetched != null) {
         (episodes ??= <Torrent>[]).addAll(fetched);
         if (fetched.any((t) => t.streamType == StreamType.torrent)) {
@@ -544,7 +625,7 @@ class _SourceSheetState extends State<SourceSheet> {
         }
       }
     }
-    if (!mounted) return;
+    if (!current()) return;
     if (episodes == null) {
       setState(() {
         _fetchingGroups.remove(group.id);
@@ -562,6 +643,7 @@ class _SourceSheetState extends State<SourceSheet> {
         widget.sources,
         episodes,
       );
+      if (!current()) return;
       widget.onSourcesMerged?.call(afterEpisodes);
     }
     final packSearch = fetcher.fetchAddonPacks;
@@ -569,10 +651,12 @@ class _SourceSheetState extends State<SourceSheet> {
     setState(() => _packProbing.add(group.id));
     List<Torrent>? packs;
     for (final addonId in magnetIds) {
+      if (!current()) return;
       final fetched = await packSearch(addonId, s);
+      if (!current()) return;
       if (fetched != null) (packs ??= <Torrent>[]).addAll(fetched);
     }
-    if (!mounted) return;
+    if (!current()) return;
     setState(() => _packProbing.remove(group.id));
     if (packs != null && packs.isNotEmpty) {
       // widget.sources only adopts the episode merge after the parent's

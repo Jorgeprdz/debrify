@@ -12,6 +12,23 @@ void main() {
     episode: 2,
   );
 
+  test('superseded switch cannot install target after pending checkpoint', () async {
+    final pending = Completer<MdblistResult<Map<String, dynamic>>>();
+    var permitted = true;
+    final session = MdblistScrobbleSession(
+      target: movie, budgetAvailable: () => true,
+      sender: (_, __, ___) => pending.future,
+    );
+    session.updatePosition(const Duration(minutes: 10), const Duration(minutes: 100));
+    session.play();
+    final switching = session.switchTarget(episode, permitted: () => permitted);
+    permitted = false;
+    pending.complete(const MdblistResult.success({}));
+    await switching;
+    expect(session.target, movie);
+    await session.close();
+  });
+
   test('uses pause checkpoints and never start', () async {
     final calls = <String>[];
     final session = MdblistScrobbleSession(
