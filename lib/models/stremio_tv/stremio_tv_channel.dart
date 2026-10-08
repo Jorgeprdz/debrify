@@ -35,6 +35,9 @@ class StremioTvChannel {
   /// Whether this channel is backed by a local JSON catalog (not a remote addon)
   final bool isLocal;
 
+  /// Channel artwork independent of the currently playing movie poster.
+  final String? coverUrl;
+
   /// Lazily loaded catalog items (cached)
   List<StremioMeta> items;
 
@@ -50,6 +53,7 @@ class StremioTvChannel {
     this.genre,
     this.isFavorite = false,
     this.isLocal = false,
+    this.coverUrl,
     this.items = const [],
     this.lastFetched,
   });
@@ -93,6 +97,7 @@ class StremioTvChannel {
     required List<StremioMeta> items,
     bool isFavorite = false,
     String groupId = 'local',
+    String? coverUrl,
   }) {
     final addon = StremioAddon(
       id: 'local',
@@ -107,7 +112,8 @@ class StremioTvChannel {
     );
     return StremioTvChannel(
       id: '$groupId:$catalogId:$catalogType',
-      displayName: 'Local: $catalogName',
+      displayName: coverUrl == null ? 'Local: $catalogName' : catalogName,
+      coverUrl: coverUrl,
       addon: addon,
       catalog: catalog,
       channelNumber: channelNumber,
