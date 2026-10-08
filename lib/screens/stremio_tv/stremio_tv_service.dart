@@ -123,6 +123,9 @@ class StremioTvService {
             // toggle (persisted under channel.id) round-trips with this
             // hydration check.
             groupId: groupId,
+            coverUrl: (catalog['cover'] as String?)?.trim().isNotEmpty == true
+                ? (catalog['cover'] as String).trim()
+                : null,
           ),
         );
       }
