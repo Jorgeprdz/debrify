@@ -1,0 +1,16 @@
+{
+  "checked_at": "2026-10-08T03:10:22.439920+00:00",
+  "repository": "Jorgeprdz/debrify",
+  "api": "GET /repos/Jorgeprdz/debrify/actions/secrets",
+  "total_count": 0,
+  "required_names": [
+    "TMDB_READ_ACCESS_TOKEN",
+    "KEYSTORE_BASE64",
+    "KEYSTORE_PASSWORD",
+    "KEY_PASSWORD",
+    "KEY_ALIAS"
+  ],
+  "values_read": false,
+  "status": "EXTERNAL_BUILD_CONFIGURATION_MISSING",
+  "user_question": "Configure required secrets in GitHub settings; no values requested in chat"
+}

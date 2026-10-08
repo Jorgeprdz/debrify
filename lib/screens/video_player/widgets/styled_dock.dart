@@ -83,6 +83,12 @@ class StyledDock extends StatelessWidget {
   final VoidCallback? onToggleStartOverTimeline;
   final bool startOverTimelineVisible;
   final VoidCallback? onPip;
+  final bool showCastButton;
+  final bool castConnected;
+  final bool castConnecting;
+  final bool castError;
+  final String? castDeviceName;
+  final VoidCallback? onCast;
 
   final bool hasNext;
   final bool hasPrevious;
@@ -177,6 +183,12 @@ class StyledDock extends StatelessWidget {
     this.onToggleStartOverTimeline,
     this.startOverTimelineVisible = false,
     this.onPip,
+    this.showCastButton = false,
+    this.castConnected = false,
+    this.castConnecting = false,
+    this.castError = false,
+    this.castDeviceName,
+    this.onCast,
     this.hasNext = false,
     this.hasPrevious = false,
     this.hasNextChannel = false,
@@ -394,9 +406,63 @@ class StyledDock extends StatelessWidget {
                         fontSize: metrics.label,
                       ),
                     ),
+                  if (castConnected &&
+                      castDeviceName?.trim().isNotEmpty == true)
+                    Text(
+                      'CASTING TO: ${castDeviceName!.trim()}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.inkDim,
+                        fontSize: metrics.label * 0.9,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
                 ],
               ),
             ),
+            if (showCastButton && onCast != null)
+              IconButton(
+                icon: castConnecting
+                    ? SizedBox(
+                        width: metrics.icon,
+                        height: metrics.icon,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: palette.ink,
+                        ),
+                      )
+                    : Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Icon(
+                            castConnected ? Icons.cast_connected : Icons.cast,
+                            color: palette.ink,
+                            size: metrics.icon,
+                          ),
+                          if (castError)
+                            const Positioned(
+                              right: -5,
+                              top: -5,
+                              child: Icon(
+                                Icons.error,
+                                size: 12,
+                                color: Colors.redAccent,
+                              ),
+                            ),
+                        ],
+                      ),
+                iconSize: metrics.icon,
+                tooltip: castConnecting
+                    ? 'Connecting to Cast'
+                    : castError
+                    ? 'Cast error'
+                    : castConnected
+                    ? 'Casting'
+                    : 'Cast',
+                onPressed: onCast,
+              ),
             // PiP lives here, not in the tools row: legacy keeps it reachable
             // independently of `hideOptions`, and burying it in the tools row
             // would lose it whenever options are hidden.

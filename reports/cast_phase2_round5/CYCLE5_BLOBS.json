@@ -1,0 +1,23 @@
+{
+  "lib/services/cast_load_coordinator.dart": "52082ee48729ccc3f006f4049de63459bd7ad4bd",
+  "lib/services/cast_player_authority.dart": "838cb62c0b92a02d39888ab0ad16825b3a6c6a56",
+  "scripts/cast_phase2_lexical_check.py": "2ce1ebb885ee1307c4e00ead1f708bad85ff8bf5",
+  "scripts/cast_phase2_round5_static_audit.py": "2f050d113226009b97ac55e4c2a1415a25274ba6",
+  "scripts/cast_phase2_round5_static_gate.sh": "fd0f4ff671ca0d79e1b4e2c43d73621846358d2f",
+  "test/services/cast_load_coordinator_test.dart": "910f6bf9f20db44882544958b825ff05d48d5a4c",
+  "test/services/cast_player_authority_test.dart": "6a8fa16e83a2e7d4245bb3ca052546819f88eef5",
+  "test/services/cast_service_coordination_test.dart": "f277c97ab6f5aadf0ec9c674ff6295ff271e249e",
+  "test/services/cast_stream_security_round5_test.dart": "c6b0ba5ed0db4cd655cc6db1c4bcc5179972326f",
+  "test/source_sheet_cast_intent_test.dart": "68dfbe77427ace645970d53988ba690f658c15c8",
+  "android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastManager.kt": "c26ac2cbdbda7b23455bb9ebf4c49dcda021d920",
+  "lib/screens/video_player/widgets/source_sheet.dart": "3853b4497b275dd6ff97add8205542970962c81e",
+  "lib/screens/video_player_screen.dart": "aabe3eb642bc2c4b17ac9622aba61ffffec21f82",
+  "lib/services/cast_service.dart": "27215bc750fed1ad32fcdd49c1820ef2673de0c3",
+  "lib/services/iptv_media_store.dart": "894bdc62e86ed5d59b3d1607821736312d607b65",
+  "lib/services/mdblist/mdblist_scrobble_session.dart": "263add05c4e18dfcf5e3bbd48c29351b192ee0f9",
+  "lib/services/storage_service.dart": "5cac8a5c7a4fd950bed9d796afe04f4b1674bd45",
+  "pubspec.lock": "3b7b2032d12b6300690f01b84b3a6213cb201bf1",
+  "pubspec.yaml": "2c4bb1756a4f75b23e4f299a12bdab459dd00e01",
+  "test/services/cast_service_test.dart": "4b99c93a71c2e471d0c788ed703b8031a197b704",
+  "test/services/mdblist/mdblist_scrobble_session_test.dart": "0fce92d16ff59a843dbb8844a7309bef40ec69f1"
+}

@@ -1,0 +1,699 @@
+{
+  "count": 99,
+  "meaning": "new or rewritten named test cases relative to baseline; 45 mandatory included, not an execution result",
+  "cases": [
+    {
+      "file": "test/iptv_media_store_test.dart",
+      "line": 57,
+      "name": "navigation after resume delete rolls back deletion and tombstones atomically",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/profiles/cast_mutation_authority_test.dart",
+      "line": 28,
+      "name": "Cast string write revoked while WebDAV barrier held never reaches delegate",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/profiles/cast_mutation_authority_test.dart",
+      "line": 51,
+      "name": "Cast completion list revoked behind barrier cannot mark another episode finished",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/profiles/cast_mutation_authority_test.dart",
+      "line": 73,
+      "name": "Revoked atomic Cast preference draft never invokes mutation callback",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 32,
+      "name": "I01 slow A, fast B intent: stale A never commits",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 49,
+      "name": "I02 late provider A cannot enqueue after B has begun",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 62,
+      "name": "I03 A in flight, B/C queued: B settles, only C is dispatched",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 81,
+      "name": "L11 A fails while newer B is pending; B drains",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 96,
+      "name": "current failure settles and does not poison subsequent requests",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 110,
+      "name": "invalid ACK identity is rejected",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 119,
+      "name": "rollback of obsolete generation is not submitted",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 131,
+      "name": "disconnect invalidates caller, but late ACK never commits",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 143,
+      "name": "new session intent cannot overlap old unresolved transport",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 160,
+      "name": "L09 timeout settles caller without releasing physical exclusion",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 188,
+      "name": "L07 reentrant completion submits later request only after old completion",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 205,
+      "name": "L12 dispose settles physical and queued callers exactly once",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 223,
+      "name": "pre-dispatch permission rejects without touching receiver",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 236,
+      "name": "prior dispatched control physically blocks a newer LOAD",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 259,
+      "name": "a new control does not bypass an outstanding LOAD",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 278,
+      "name": "control permission is rechecked before physical dispatch",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 291,
+      "name": "L10 stale physical ACK is observed but cannot become logical commit",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 321,
+      "name": "L08 pending replacement within same generation dispatches only final",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 344,
+      "name": "rejected physical ACK leaves coordinator reusable",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 363,
+      "name": "throwing physical observer does not authorize stale commit",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 383,
+      "name": "I05 cancelled ticket never invokes deferred LOAD factory",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 398,
+      "name": "stale control result is logically null after navigation",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 411,
+      "name": "active control is not bypassed by a newer LOAD",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 433,
+      "name": "dispose during control still preserves physical exclusion",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 451,
+      "name": "current permission revocation blocks pending provider dispatch",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 471,
+      "name": "old generation cannot issue control after new session intent",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 491,
+      "name": "I04 current rejected load never promotes an older request",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_load_coordinator_test.dart",
+      "line": 515,
+      "name": "dispose settles control caller immediately while native Future remains held",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 14,
+      "name": "sleep stop during deferred restore seek dispatches pause instead of play",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 29,
+      "name": "sleep stop during local yield pauses accepted receiver before publication",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 48,
+      "name": "previous guide completion retains its original intent and cannot promote A",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 61,
+      "name": "confirmed retirement releases only its uncommitted initial transfer",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 81,
+      "name": "local pause failure cannot publish Cast ownership",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 94,
+      "name": "retired receiver during local pause cannot publish Cast ownership",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 109,
+      "name": "late manual OFF cannot overwrite newer language on the same media",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 131,
+      "name": "restored receiver refresh cannot adopt after local source changes",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 141,
+      "name": "receiver reconnect while local restore seeks blocks play and publication",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 155,
+      "name": "E37 old tracker STOP uses A clock and settles before B starts",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 179,
+      "name": "E38 ended continuation is rejected after newer navigation",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 197,
+      "name": "E39 same URL and media session from another epoch has no authority",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 208,
+      "name": "E40 threshold and ended claim one immutable effective completion",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 220,
+      "name": "E41 disconnect opens committed B before seeking and restoring play",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_player_authority_test.dart",
+      "line": 236,
+      "name": "E42 foreground resume rejects both transfers and Cast ownership",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_series_language_preferences_test.dart",
+      "line": 13,
+      "name": "series OFF and another series language survive independent storage reads",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_series_language_preferences_test.dart",
+      "line": 30,
+      "name": "audio-only series choice preserves durable subtitle OFF",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_series_language_preferences_test.dart",
+      "line": 42,
+      "name": "obsolete scoped preference cannot overwrite the current series intent",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 124,
+      "name": "I06 local source fallback preserves local telemetry and ownership",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 136,
+      "name": "C13 manual seek validates exact committed URL media ID and epoch",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 158,
+      "name": "C14 deferred percent seek cancels when navigation supersedes ticket",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 176,
+      "name": "C15 a manual seek never dispatches while LOAD is physical",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 191,
+      "name": "C16 later LOAD waits for previously dispatched seek physical ACK",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 213,
+      "name": "C17 timed-out seek cannot commit late and still excludes next LOAD",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 247,
+      "name": "C18 late pause ACK and event never rewrite clock in either channel order",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 283,
+      "name": "S19 fresh matching receiver identity adopts without LOAD",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 296,
+      "name": "S20 restored receiver with mismatching URL cannot adopt",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 305,
+      "name": "S21 matching restored URL with wrong media session cannot adopt",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 314,
+      "name": "S22 matching restored URL and media ID with wrong epoch cannot adopt",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 323,
+      "name": "S23 retired session callback cannot disconnect new session",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 334,
+      "name": "S24 old bridge LOAD ACK after recreation cannot commit",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 350,
+      "name": "R25 superseded physical A ACK is observed without committing A",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 360,
+      "name": "R26 current timed-out A late ACK enters recovery with frozen P clock",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 384,
+      "name": "R27 verified B commit clears recovery after late A and failed B provider",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 401,
+      "name": "R28 provisional event does not reject earlier valid LOAD ACK",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 418,
+      "name": "R29 bridge with no session retires old callbacks then reconnects",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 432,
+      "name": "R30 proven disconnect clears recovery and preserves accepted resume",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 446,
+      "name": "T31 language policy reads committed remote tracks after LOAD",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 463,
+      "name": "T32 manual OFF wins over delayed automatic language preference",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 478,
+      "name": "T33 stale embedded subtitle result cannot change newly committed media",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 496,
+      "name": "T34 prepared WebVTT request leaves committed language intent untouched",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 510,
+      "name": "T35 rejected addon replacement retains previous track intent",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 531,
+      "name": "T36 obsolete subtitle LOAD cannot clear current transition authority",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 552,
+      "name": "P43 Phase 1 load initializes before epoch capture and preserves errors",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 567,
+      "name": "first-ever timed-out LOAD late ACK exposes recovery without accepted media",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 589,
+      "name": "native blocked signal notifies even while replacement clock is frozen",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 607,
+      "name": "ordinary controls carry exact committed identity and reject divergence",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 624,
+      "name": "same session bridge recreation preserves exact identity and accepts new revision origin",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 637,
+      "name": "disposing service rejects late physical snapshots without notification",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 653,
+      "name": "suspension keeps accepted identity and blocks until resume or confirmed retirement",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 675,
+      "name": "unconfirmed disconnect cannot clear session subtitle OFF intent",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 693,
+      "name": "ordinary accepted P progress remains live after failed B provider without stale control",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 703,
+      "name": "current STOP accepts unloaded event and ACK in either channel order",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 723,
+      "name": "superseded STOP cannot authorize unload event for newer navigation",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 741,
+      "name": "confirmed retirement always notifies after timed-out physical LOAD exclusion ends",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 772,
+      "name": "replaced accepted session requires visible recovery until exact verified adoption",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 790,
+      "name": "confirmed retirement notifies after timed-out control fence ends in either channel order",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_coordination_test.dart",
+      "line": 824,
+      "name": "STOP accepts invalidated media session with cached same-target metadata",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_test.dart",
+      "line": 15,
+      "name": "parses native session epoch and snapshot revision",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_service_test.dart",
+      "line": 28,
+      "name": "legacy Phase 1 snapshot omits native session identity safely",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_stream_security_round5_test.dart",
+      "line": 32,
+      "name": "P44 split audio/video stream cannot masquerade as direct receiver media",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/cast_stream_security_round5_test.dart",
+      "line": 49,
+      "name": "P45 credential headers are rejected before any native LOAD transmission",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/services/mdblist/mdblist_scrobble_session_test.dart",
+      "line": 15,
+      "name": "superseded switch cannot install target after pending checkpoint",
+      "kind": "test",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/source_sheet_cast_intent_test.dart",
+      "line": 19,
+      "name": "current Cast selection survives own authority change and telemetry rebuild",
+      "kind": "testWidgets",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/source_sheet_cast_intent_test.dart",
+      "line": 48,
+      "name": "A B A current-source tap retires pending B provider intent",
+      "kind": "testWidgets",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/source_sheet_cast_intent_test.dart",
+      "line": 74,
+      "name": "addon result from episode A cannot merge after episode B rebuild",
+      "kind": "testWidgets",
+      "status": "AUTHORED / NOT RUN"
+    },
+    {
+      "file": "test/source_sheet_cast_intent_test.dart",
+      "line": 107,
+      "name": "latest selected source wins over prior provider",
+      "kind": "testWidgets",
+      "status": "AUTHORED / NOT RUN"
+    }
+  ]
+}
