@@ -401,13 +401,36 @@ class ProfilePreferences implements SharedPreferences {
     budgetValue: value,
   );
 
+  /// Content authority can change while an ordinary write waits behind sync.
+  /// Keep profile/security/budget checks and recheck at the delegate edge.
+  Future<bool> setStringGuarded(String key, String value, {
+    required bool Function() permitted,
+  }) => _write(
+    () => _delegate.setString(_physical(key), value),
+    logicalKey: key,
+    budgetKey: _physical(key),
+    budgetValue: value,
+    permitted: permitted,
+  );
+
+  Future<bool> setStringListGuarded(String key, List<String> value, {
+    required bool Function() permitted,
+  }) => _write(
+    () => _delegate.setStringList(_physical(key), value),
+    logicalKey: key,
+    budgetKey: _physical(key),
+    budgetValue: value,
+    permitted: permitted,
+  );
+
   /// Atomically recompute a JSON/string value after entering the ordinary
   /// mutation barrier, so a WebDAV apply cannot invalidate the read before
   /// its write. The callback is synchronous and must not mutate preferences.
   Future<bool> mutateStringAtomically(
     String key,
-    String Function(String? current) update,
-  ) {
+    String Function(String? current) update, {
+    bool Function()? permitted,
+  }) {
     _assertMutationOutsideExclusive();
     return _atomicStringListMutationLock.synchronized(() {
       late String next;
@@ -416,6 +439,7 @@ class ProfilePreferences implements SharedPreferences {
         logicalKey: key,
         budgetKey: _physical(key),
         prepareValue: () => next = update(_delegate.getString(_physical(key))),
+        permitted: permitted,
       );
     });
   }
@@ -457,8 +481,9 @@ class ProfilePreferences implements SharedPreferences {
   /// Returning null from [update] leaves the stored value unchanged.
   Future<bool> mutateStringListAtomically(
     String key,
-    List<String>? Function(List<String>? current) update,
-  ) {
+    List<String>? Function(List<String>? current) update, {
+    bool Function()? permitted,
+  }) {
     // Check before taking the list-specific lock. Otherwise a guarded WebDAV
     // callback could wait on a writer that is itself waiting for the WebDAV
     // barrier, recreating the lock inversion this guard is meant to prevent.
@@ -477,6 +502,7 @@ class ProfilePreferences implements SharedPreferences {
         logicalKey: key,
         budgetKey: physical,
         budgetValue: frozen,
+        permitted: permitted,
       );
     });
   }
@@ -752,12 +778,16 @@ class ProfilePreferences implements SharedPreferences {
     String? budgetKey,
     Object? budgetValue,
     Object? Function()? prepareValue,
+    bool Function()? permitted,
   }) async {
     _assertWritable();
     var unchanged = false;
     Object? mutationValue = budgetValue;
     final success = await _runOrdinaryMutation((markMutated) async {
       _assertWritable();
+      // No async gap remains between this check and prepare/delegate dispatch.
+      // Returning false performs no write, mutation revision or publication.
+      if (permitted?.call() == false) return false;
       final proposedValue = prepareValue != null ? prepareValue() : budgetValue;
       mutationValue = proposedValue;
       if (_capturedAccess == null && budgetKey != null) {

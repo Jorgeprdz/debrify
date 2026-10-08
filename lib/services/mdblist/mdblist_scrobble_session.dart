@@ -28,7 +28,10 @@ class MdblistScrobbleSession {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   Future<void> _tail = Future.value();
+  Future<void> _switchTail = Future.value();
+  int _switchRevision = 0;
   bool _playing = false;
+  bool _suspended = false;
   bool _closed = false;
   bool _checkpointingStopped = false;
   bool _stopQueuedForIdentity = false;
@@ -94,8 +97,16 @@ class MdblistScrobbleSession {
     _duration = duration;
   }
 
+  void suspend() {
+    _suspended = true;
+    _playing = false;
+    _timer?.cancel();
+    _timer = null;
+  }
+
   void play() {
     if (_closed || _playing) return;
+    _suspended = false;
     debugPrint(
       '[MDBListDiag] session play imdb=${target.ids.imdb} '
       'progress=${progress.toStringAsFixed(3)}',
@@ -135,24 +146,35 @@ class MdblistScrobbleSession {
     MdblistScrobbleTarget next, {
     Duration position = Duration.zero,
     Duration duration = Duration.zero,
-  }) async {
-    final wasPlaying = _playing;
-    _finish();
-    await flush();
-    await _retryFailedCompletion();
-    target = next;
-    _position = position;
-    _duration = duration;
-    _stoppedForIdentity = false;
-    _stopQueuedForIdentity = false;
-    _lastQueuedAction = null;
-    _lastQueuedProgress = null;
-    _playing = wasPlaying;
-    if (wasPlaying) {
-      _checkpoint(force: true);
-      _timer?.cancel();
-      _timer = Timer.periodic(checkpointInterval, (_) => _checkpoint());
-    }
+    bool Function()? permitted,
+  }) {
+    final revision = ++_switchRevision;
+    bool current() => !_closed && revision == _switchRevision &&
+        (permitted?.call() ?? true);
+    final operation = _switchTail.then((_) async {
+      if (!current()) return;
+      final wasPlaying = _playing;
+      _finish();
+      await flush();
+      if (!current()) return;
+      await _retryFailedCompletion();
+      if (!current()) return;
+      target = next;
+      _position = position;
+      _duration = duration;
+      _stoppedForIdentity = false;
+      _stopQueuedForIdentity = false;
+      _lastQueuedAction = null;
+      _lastQueuedProgress = null;
+      _playing = wasPlaying;
+      if (wasPlaying) {
+        _checkpoint(force: true);
+        _timer?.cancel();
+        _timer = Timer.periodic(checkpointInterval, (_) => _checkpoint());
+      }
+    });
+    _switchTail = operation.catchError((_) {});
+    return operation;
   }
 
   void complete() {
@@ -169,6 +191,7 @@ class MdblistScrobbleSession {
   }
 
   Future<void> close() async {
+    ++_switchRevision;
     if (_closed) return;
     debugPrint(
       '[MDBListDiag] session close imdb=${target.ids.imdb} '
@@ -194,7 +217,7 @@ class MdblistScrobbleSession {
   }
 
   void _checkpoint({bool force = false}) {
-    if (_closed || _checkpointingStopped || !target.isValid) return;
+    if (_closed || _suspended || _checkpointingStopped || !target.isValid) return;
     final rawValue = progress;
     if (rawValue >= completionPercent) return;
     final value = rawValue <= 0 ? 1.0 : rawValue;
@@ -257,7 +280,7 @@ class MdblistScrobbleSession {
       'progress=${rounded.toStringAsFixed(2)} force=$force',
     );
     _tail = _tail.then((_) async {
-      if (_checkpointingStopped && action == 'pause') return;
+      if ((_checkpointingStopped || _suspended) && action == 'pause') return;
       final result = await sender(action, queuedTarget, rounded);
       if (action == 'stop') {
         _stopQueuedForIdentity = false;

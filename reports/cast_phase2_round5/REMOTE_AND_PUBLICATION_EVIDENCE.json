@@ -1,0 +1,37 @@
+{
+  "repository": "Jorgeprdz/debrify",
+  "observed_remote_head": "7f288ecc79def0eb5a7439abc3fc5a74ec39772e",
+  "pull_requests": {
+    "3": {
+      "baseRefName": "main",
+      "headRefName": "feature/google-cast-phase1",
+      "headRefOid": "ea1e17a1bb2e1dec80d683b2e0d77597e162b428",
+      "mergedAt": null,
+      "number": 3,
+      "state": "OPEN",
+      "url": "https://github.com/Jorgeprdz/debrify/pull/3"
+    },
+    "4": {
+      "baseRefName": "feature/google-cast-phase1",
+      "headRefName": "feature/google-cast-phase2",
+      "headRefOid": "7f288ecc79def0eb5a7439abc3fc5a74ec39772e",
+      "mergedAt": null,
+      "number": 4,
+      "state": "OPEN",
+      "url": "https://github.com/Jorgeprdz/debrify/pull/4"
+    }
+  },
+  "workflow_inventory": [
+    {
+      "file": ".github/workflows/build.yml",
+      "sha256": "26c06c27f417d37fe0cc637579471e9201bf35ab9f9a916f58a10c21e28e341f",
+      "events": [
+        "release",
+        "workflow_dispatch"
+      ],
+      "push_or_pr_trigger": false
+    }
+  ],
+  "actions_invoked": false,
+  "publication_trigger_check": "normal push and PR body update have no matching configured workflow event"
+}

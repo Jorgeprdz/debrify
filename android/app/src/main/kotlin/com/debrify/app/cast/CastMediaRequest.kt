@@ -3,6 +3,7 @@ package com.debrify.app.cast
 import android.net.Uri
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaTrack
 import com.google.android.gms.common.images.WebImage
 import java.net.URI
 import java.util.Locale
@@ -11,6 +12,23 @@ internal class CastRequestException(
     val errorCode: String,
     message: String,
 ) : IllegalArgumentException(message)
+
+data class CastTextTrackRequest(
+    val id: Long,
+    val url: String,
+    val language: String,
+    val label: String,
+    val mimeType: String,
+) {
+    fun toMediaTrack(): MediaTrack =
+        MediaTrack.Builder(id, MediaTrack.TYPE_TEXT)
+            .setName(label)
+            .setSubtype(MediaTrack.SUBTYPE_SUBTITLES)
+            .setContentId(url)
+            .setContentType(mimeType)
+            .setLanguage(language)
+            .build()
+}
 
 data class CastMediaRequest(
     val url: String,
@@ -27,6 +45,7 @@ data class CastMediaRequest(
     val autoplay: Boolean,
     val isLive: Boolean,
     val headers: Map<String, String>,
+    val textTracks: List<CastTextTrackRequest>,
 ) {
     val hasUnsupportedHeaders: Boolean
         get() = headers.isNotEmpty()
@@ -70,6 +89,9 @@ data class CastMediaRequest(
                 else MediaInfo.STREAM_TYPE_BUFFERED,
             )
             .setMetadata(metadata)
+        if (textTracks.isNotEmpty()) {
+            builder.setMediaTracks(textTracks.map(CastTextTrackRequest::toMediaTrack))
+        }
         durationMs?.takeIf { it >= 0 && !isLive }?.let(builder::setStreamDuration)
         return builder.build()
     }
@@ -93,6 +115,31 @@ data class CastMediaRequest(
                 }
             }
 
+            val textTracks = (raw["textTracks"] as? List<*>)
+                ?.mapNotNull { item ->
+                    val map = item as? Map<*, *> ?: return@mapNotNull null
+                    val id = (map["id"] as? Number)?.toLong() ?: return@mapNotNull null
+                    val trackUrl = (map["url"] as? String)?.trim().orEmpty()
+                    val language = (map["language"] as? String)?.trim().orEmpty()
+                    val label = (map["label"] as? String)?.trim().orEmpty()
+                    val type = (map["mimeType"] as? String)?.trim().orEmpty()
+                    if (!isDirectHttpUrl(trackUrl) ||
+                        !type.equals("text/vtt", ignoreCase = true) ||
+                        language.isEmpty()
+                    ) {
+                        return@mapNotNull null
+                    }
+                    CastTextTrackRequest(
+                        id = id,
+                        url = trackUrl,
+                        language = language,
+                        label = label.ifEmpty { language },
+                        mimeType = "text/vtt",
+                    )
+                }
+                ?.distinctBy { it.id }
+                ?: emptyList()
+
             return CastMediaRequest(
                 url = url,
                 mimeType = (raw["mimeType"] as? String)?.trim()?.ifEmpty { null },
@@ -108,6 +155,7 @@ data class CastMediaRequest(
                 autoplay = raw["autoplay"] as? Boolean ?: true,
                 isLive = raw["isLive"] as? Boolean ?: false,
                 headers = headers,
+                textTracks = textTracks,
             )
         }
 

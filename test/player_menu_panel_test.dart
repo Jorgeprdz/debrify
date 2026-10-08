@@ -37,7 +37,7 @@ void main() {
             PlayerMenuTrackOption('2', 'Français'),
           ],
           selectedAudioId: '1',
-          onAudioSelected: (_, __) async {},
+          onAudioSelected: (_, __) async => true,
           embeddedSubtitles: const [PlayerMenuTrackOption('3', 'English')],
           selectedSubtitleId: selectedSubtitleId,
           onSubtitlesOff: onSubtitlesOff ?? (_) async => true,

@@ -11,7 +11,7 @@ import '../utils/media_kit_init.dart';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb, listEquals;
+import 'package:flutter/foundation.dart' show kIsWeb, listEquals, mapEquals;
 import 'package:flutter/material.dart';
 import '../models/custom_series_identity.dart';
 import 'package:path_provider/path_provider.dart';
@@ -35,6 +35,9 @@ import '../services/analytics_service.dart';
 import '../services/pip_service.dart';
 import '../services/audio_effect_session_service.dart';
 import '../services/cast_service.dart';
+import '../services/cast_load_coordinator.dart';
+import '../services/cast_phase2_policy.dart';
+import '../services/cast_player_authority.dart';
 import '../services/tvos_decode_remedy.dart';
 import '../services/tvos_display_match_service.dart';
 import '../services/android_native_downloader.dart';
@@ -498,16 +501,232 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   Future<void>? _episodeMetadataReady;
   late final Future<void> _playerInitializationFuture;
   int _playlistIdentityToken = 0;
+  List<PlaylistEntry>? _metadataPersistencePlaylist;
   final ValueNotifier<bool> _controlsVisible = ValueNotifier<bool>(true);
   String?
   _currentStreamUrl; // Last resolved stream URL for the active playlist entry
 
+  final Object? _playerProfileScope = ProfileRuntime.scope.value;
+  bool get _playerProfileCurrent => _playerProfileScope == ProfileRuntime.scope.value;
+  void _onPlayerProfileChanged() {
+    if (_playerProfileCurrent) return;
+    _stopTraktHeartbeat();
+    _stopSimklHeartbeat();
+    _mdblistSession?.suspend();
+    if (_playerCreated) unawaited(_player.pause().catchError((Object error) {
+      debugPrint('Player: profile-change pause failed (${error.runtimeType})');
+    }));
+  }
+
   final CastService _castService = CastService.instance;
+  final PlaybackOwnershipController _playbackOwnership =
+      PlaybackOwnershipController();
   CastMediaRequest? _pendingCastRequest;
+  CastMediaRequest? _activeCastRequest;
+  CastPlayerMediaIdentity? _activeCastMediaIdentity;
+  CastSnapshot? _lastCastDisconnectSnapshot;
+  final CastPlayerTrackingQueue _traktEffects = CastPlayerTrackingQueue();
+  final CastPlayerTrackingQueue _simklEffects = CastPlayerTrackingQueue();
+  Future<void> _queueTrackerEffect(CastPlayerTrackingQueue queue,
+    Future<Object?> Function() effect, {bool historical = false}) {
+    final profile = ProfileRuntime.scope.value;
+    final castIdentity = _castRemoteActive ? _castMediaIdentity() : null;
+    final localUrl = _currentStreamUrl;
+    return queue.send(() async {
+      if (!_playerProfileCurrent || profile != ProfileRuntime.scope.value) return null;
+      if (castIdentity != null) {
+        if (_castService.receiverOperationBlocked || _castService.receiverRecoveryRequired ||
+            !_castService.connected) return null;
+        if (!historical && (_castService.hasLoadInFlight ||
+            !castIdentity.sameMediaAs(_castMediaIdentity()))) return null;
+      } else if (!historical && (!mounted || !_playbackOwnership.isLocal || _castRemoteActive ||
+          localUrl != _currentStreamUrl)) { return null; }
+      return await effect();
+    });
+  }
+
+  final CastPlayerCompletionGate _completionGate = CastPlayerCompletionGate();
+  CastPlayerMediaIdentity _castMediaIdentity([CastSnapshot? value]) {
+    final snapshot = value ?? _castService.snapshot;
+    return CastPlayerMediaIdentity(
+      generation: _castNavigationGeneration,
+      bridgeInstanceId: snapshot.bridgeInstanceId,
+      sessionEpoch: snapshot.sessionEpoch,
+      mediaSessionId: snapshot.mediaSessionId,
+      contentId: snapshot.mediaContentId,
+      endedSequence: snapshot.endedSequence,
+    );
+  }
+
+  CastPlayerEffectTicket _castEffectTicket([CastSnapshot? value]) =>
+      CastPlayerEffectTicket(_castMediaIdentity(value), () {
+        if (!mounted || !_playerProfileCurrent || _castExplicitRouteExit || !_castRemoteActive ||
+            !_playbackOwnership.isCast || !_castService.connected ||
+            _castService.receiverOperationBlocked ||
+            _castService.receiverRecoveryRequired) return null;
+        return _castMediaIdentity();
+      });
+
+  bool _acceptedCastSnapshotCurrent(CastSnapshot snapshot) {
+    final accepted = _activeCastMediaIdentity;
+    return accepted != null && snapshot.connected &&
+        !_castService.receiverOperationBlocked && !_castService.receiverRecoveryRequired &&
+        snapshot.bridgeInstanceId == accepted.bridgeInstanceId &&
+        snapshot.sessionEpoch == accepted.sessionEpoch &&
+        snapshot.mediaSessionId == accepted.mediaSessionId &&
+        snapshot.mediaContentId == accepted.contentId &&
+        snapshot.mediaContentId == _activeCastRequest?.url;
+  }
+
+  bool Function() _capturePlayerEffectGuard() {
+    final profile = ProfileRuntime.scope.value;
+    final playlistIdentity = _playlistIdentityToken;
+    final index = _currentIndex;
+    final url = _currentStreamUrl;
+    final localNavigation = _episodeNavigationGeneration;
+    final castIdentity = _castRemoteActive ? _castMediaIdentity() : null;
+    return () => mounted && !_screenDisposed && _playerProfileCurrent &&
+        profile == ProfileRuntime.scope.value &&
+        playlistIdentity == _playlistIdentityToken && index == _currentIndex &&
+        url == _currentStreamUrl && localNavigation == _episodeNavigationGeneration &&
+        (castIdentity == null
+          ? !_castRemoteActive
+          : _castRemoteActive && !_castExplicitRouteExit &&
+              !_castService.hasLoadInFlight &&
+              _acceptedCastSnapshotCurrent(_castService.snapshot) &&
+              castIdentity.sameMediaAs(_castMediaIdentity()));
+  }
+
+  CastPlayerTrackingTarget _captureCastTrackingTarget() {
+    final se = _traktSeasonEpisode();
+    return CastPlayerTrackingTarget(
+      imdbId: _effectiveContentImdbId,
+      contentType: _effectiveContentType,
+      season: se.season, episode: se.episode,
+      position: _authoritativePosition, duration: _authoritativeDuration,
+    );
+  }
+
+  CastPlayerCompletionTarget _captureCompletionTarget() {
+    final se = _traktSeasonEpisode();
+    final series = _effectiveContentType == 'series' || _seriesPlaylist?.isSeries == true;
+    return CastPlayerCompletionTarget(
+      imdbId: series ? _currentSeriesImdbId : _currentLocalMovieImdbId,
+      contentType: series ? 'series' : 'movie',
+      title: series
+          ? (_effectiveContentTitle ?? _seriesPlaylist?.seriesTitle ?? widget.title)
+          : (_effectiveContentTitle ?? _dynamicTitle),
+      season: series ? se.season : null,
+      episode: series ? se.episode : null,
+    );
+  }
+
   bool _castRemoteActive = false;
   bool _castLoadInFlight = false;
   bool _castRestoreInFlight = false;
+  bool _castRestoreAdoptionInProgress = false;
   bool _castHandoffWasPlaying = false;
+  bool _castLocalYieldInFlight = false;
+  bool _castLocalPausedForYield = false;
+  bool _castExplicitRouteExit = false;
+  bool _castLanguagePolicyApplying = false;
+  bool _castLanguagePolicyReapply = false;
+  int _castLanguagePolicyRevision = 0;
+  String? _castLanguageSeriesIdentity;
+  Object? _castLanguageProfileScope;
+  bool _castManualAudioChosen = false;
+  bool _castManualSubtitleChosen = false;
+  String? _castSeriesLanguageIdentity() {
+    if (_effectiveContentType != 'series' && _seriesPlaylist?.isSeries != true) return null;
+    final id = _effectiveContentImdbId ?? _currentSeriesImdbId;
+    if (id != null && id.trim().isNotEmpty) return id.trim().toLowerCase();
+    final title = _effectiveContentTitle ?? _seriesPlaylist?.seriesTitle;
+    return title == null || title.trim().isEmpty ? null : 'title:${title.trim().toLowerCase()}';
+  }
+
+  void _bindCastLanguageSeries(String? identity) {
+    if (!_playerProfileCurrent) return;
+    final profile = ProfileRuntime.scope.value;
+    if (_castLanguageSeriesIdentity == identity && _castLanguageProfileScope == profile) return;
+    _castLanguageSeriesIdentity = identity;
+    _castLanguageProfileScope = profile;
+    ++_castLanguagePolicyRevision;
+    _castManualAudioChosen = false;
+    _castManualSubtitleChosen = false;
+    _castService.clearSessionTrackIntent();
+  }
+
+  CastPlayerManualIntentTicket _castManualLanguageTicket() {
+    final series = _castSeriesLanguageIdentity();
+    final authorized = _playerProfileCurrent && _playbackOwnership.isCast &&
+        !_castService.hasLoadInFlight && _acceptedCastSnapshotCurrent(_castService.snapshot);
+    if (authorized) _bindCastLanguageSeries(series);
+    final profile = ProfileRuntime.scope.value;
+    final revision = authorized ? ++_castLanguagePolicyRevision : _castLanguagePolicyRevision;
+    if (authorized && _castLanguagePolicyApplying) _castLanguagePolicyReapply = true;
+    return CastPlayerManualIntentTicket(revision: revision,
+      currentRevision: () => _castLanguagePolicyRevision, media: _castEffectTicket(),
+      permitted: () => authorized && _playerProfileCurrent &&
+          !_castService.hasLoadInFlight && _acceptedCastSnapshotCurrent(_castService.snapshot) &&
+          ProfileRuntime.scope.value == profile && _castSeriesLanguageIdentity() == series);
+  }
+
+  Future<void> _persistCastLanguageIntent(CastPlayerManualIntentTicket ticket) async {
+    final series = _castSeriesLanguageIdentity();
+    if (series == null || !ticket.isCurrent) return;
+    final playerCurrent = _capturePlayerEffectGuard();
+    final preference = CastPlayerSeriesLanguagePreference(seriesIdentity: series,
+      audioLanguage: _castService.sessionAudioLanguage,
+      subtitleLanguage: _castService.sessionSubtitleLanguage,
+      subtitlesDisabled: _castService.sessionSubtitlesDisabled,
+      updateAudio: _castManualAudioChosen, updateSubtitle: _castManualSubtitleChosen);
+    try {
+      await StorageService.saveSeriesCastLanguagePreferences(preference,
+        permitted: () => ticket.isCurrent && playerCurrent() &&
+            _castSeriesLanguageIdentity() == series);
+    } catch (_) {}
+  }
+
+  bool _castAdvanceInProgress = false;
+  bool _castSourceSwitchInProgress = false;
+  bool _castReceiverRecoveryVisible = false;
+  bool _castTrackingSuspended = false;
+  void _suspendCastTracking() {
+    if (!_castRemoteActive &&
+        _playbackOwnership.owner != PlaybackOwner.transferringToCast) return;
+    _castTrackingSuspended = true;
+    _stopTraktHeartbeat();
+    _stopSimklHeartbeat();
+    _mdblistSession?.suspend();
+  }
+  final CastEndedGate _castEndedGate = CastEndedGate();
+  int _castNavigationGeneration = 0;
+  final Map<int, List<PlaylistEntry>> _castSourcePlaylistsByIntent = {};
+  int _castPresentationGeneration = 0;
+  int _castSeekEpoch = 0;
+  int _lastCastCommittedLoadGeneration = -1;
+  bool get _castLatestLoadCommitted =>
+      _castService.isCurrentLoad(_lastCastCommittedLoadGeneration);
+
+  int _beginCastNavigation() {
+    final generation = _castService.beginNavigationIntent();
+    _castNavigationGeneration = generation;
+    _castStartPercentGate.cancel();
+    ++_castSeekEpoch;
+    ++_castLanguagePolicyRevision;
+    if (_castLanguagePolicyApplying) _castLanguagePolicyReapply = true;
+    return generation;
+  }
+
+  bool _castIntentCurrent(int generation) =>
+      mounted && _playerProfileCurrent && _castRemoteActive && _castService.connected &&
+      !_castExplicitRouteExit && generation == _castNavigationGeneration &&
+      _castService.isCurrentLoad(generation);
+  final CastStartPercentGate _castStartPercentGate = CastStartPercentGate();
+  CastPlaybackState _lastCastPlaybackState = CastPlaybackState.disconnected;
+  final Map<String, StremioSubtitle> _castStremioSubtitleTrackIds =
+      <String, StremioSubtitle>{};
+  StremioSubtitle? _castExtraSubtitle;
 
   // Cached IMDB ID for single-file movie playback (when no playlist exists)
   String? _singleFileImdbId;
@@ -1308,13 +1527,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       _stremioTvChannelsOverride ?? widget.stremioTvChannels;
 
   String? get _effectiveContentImdbId =>
-      _currentStremioTvContentImdbId ?? widget.contentImdbId;
+      _currentStremioTvContentTitle != null
+          ? _currentStremioTvContentImdbId : widget.contentImdbId;
   String? get _effectiveContentType =>
-      _currentStremioTvContentType ?? widget.contentType;
+      _currentStremioTvContentTitle != null
+          ? _currentStremioTvContentType : widget.contentType;
   int? get _effectiveContentSeason =>
-      _currentStremioTvContentSeason ?? widget.contentSeason;
+      _currentStremioTvContentTitle != null
+          ? _currentStremioTvContentSeason : widget.contentSeason;
   int? get _effectiveContentEpisode =>
-      _currentStremioTvContentEpisode ?? widget.contentEpisode;
+      _currentStremioTvContentTitle != null
+          ? _currentStremioTvContentEpisode : widget.contentEpisode;
   String? get _effectiveContentTitle =>
       _currentStremioTvContentTitle ?? widget.contentTitle;
 
@@ -1634,11 +1857,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       unawaited(_castService.initialize());
     }
     PlayerVisibility.opened(this);
+    ProfileRuntime.scope.addListener(_onPlayerProfileChanged);
     AnalyticsService.screenView('video_player');
     _startAnalyticsHeartbeat();
     _activePlaylist = widget.playlist
         ?.map((entry) => entry.withDefaultHttpHeaders(widget.httpHeaders))
         .toList();
+    _metadataPersistencePlaylist = _activePlaylist;
     _seriesImdbKnownAtLaunch = widget.contentImdbId?.trim().isNotEmpty == true;
     // The dock and the zap banner share the bottom strip, and the dock is
     // raised from several places that never go through _toggleControls
@@ -1764,6 +1989,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     // Initialize the player asynchronously
     _playerInitializationFuture = _initializePlayer();
+    unawaited(
+      _playerInitializationFuture.then<void>(
+        (_) => _maybeAdoptRestoredCastSession(),
+      ),
+    );
 
     // Init rainbow animation
     _rainbowController = AnimationController(
@@ -1850,6 +2080,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   void _resetLocalCompletionState() {
+    _completionGate.reset();
     _currentEpisodeMarkedAsFinished = false;
     _currentMovieMarkedAsFinished = false;
     _currentMovieRewatchStarted = false;
@@ -2018,7 +2249,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _position = target;
     _playbackUiClock.updatePosition(target, immediate: true);
     _syncActiveSkipSegmentUi();
-    unawaited(_player.seek(target));
+    _seekUserPlayback(target);
     _traktScrobbleSeek(target);
     _simklScrobbleSeek(target);
     _mdblistScrobbleSeek(target);
@@ -2027,15 +2258,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   Future<void> _initTraktScrobble() async {
     if (!widget.traktScrobble) return;
-    if (widget.contentImdbId == null) return;
-    if (widget.contentType != 'movie' && widget.contentType != 'series') return;
+    final contentId = _effectiveContentImdbId ?? widget.contentImdbId;
+    final contentType = _effectiveContentType ?? widget.contentType;
+    if (contentId == null) return;
+    if (contentType != 'movie' && contentType != 'series') return;
     final policy = (await TrackingSourcePolicy.load()).forContent(_effectiveContentImdbId);
     _traktScrobbleEnabled =
         policy.scrobbles(TrackingSource.trakt) &&
         await TraktService.instance.isAuthenticated();
     if (!mounted) return;
     // If player started playing before auth resolved, scrobble start now
-    if (_traktScrobbleEnabled && _isPlaying && _duration > Duration.zero) {
+    if (_traktScrobbleEnabled &&
+        _authoritativePlaying &&
+        _authoritativeDuration > Duration.zero) {
       _traktScrobble('start');
       if (_traktLastScrobbleAction == 'start') {
         _startTraktHeartbeat();
@@ -2049,7 +2284,34 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   /// scrobbling it would reset every tracker's REMOTE resume point to ~0:
   /// invisible on this device (local kept the bookmark) but lost on every
   /// other one, since resume takes the furthest of local and tracker.
+  bool get _authoritativePlaying {
+    if (_playbackOwnership.acceptsCastTelemetry) {
+      return _playerProfileCurrent && !_castService.hasLoadInFlight &&
+          _acceptedCastSnapshotCurrent(_castService.snapshot) &&
+          _castService.state == CastPlaybackState.playing;
+    }
+    if (_playbackOwnership.acceptsLocalTelemetry && _playerProfileCurrent) return _isPlaying;
+    return false;
+  }
+
+  Duration get _authoritativePosition {
+    if (_playbackOwnership.acceptsCastTelemetry) {
+      return _castService.position ?? _position;
+    }
+    return _position;
+  }
+
+  Duration get _authoritativeDuration {
+    if (_playbackOwnership.acceptsCastTelemetry) {
+      return _castService.duration ?? _duration;
+    }
+    return _duration;
+  }
+
   Duration get _persistablePosition {
+    if (_playbackOwnership.acceptsCastTelemetry) {
+      return _authoritativePosition;
+    }
     final heldMs = _resumeWriteGuard.heldTargetIfBlocked(
       _position.inMilliseconds,
     );
@@ -2068,9 +2330,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   double _traktProgress() {
-    if (_duration.inMilliseconds <= 0) return 0.0;
+    final duration = _authoritativeDuration;
+    if (duration.inMilliseconds <= 0) return 0.0;
     return (_persistablePosition.inMilliseconds /
-            _duration.inMilliseconds *
+            duration.inMilliseconds *
             100)
         .clamp(0.0, 100.0);
   }
@@ -2079,7 +2342,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   /// fall back to launch args, then filename parsing.
   ({int? season, int? episode}) _traktSeasonEpisode() {
     // Movies never have season/episode — avoid filename false positives (e.g. "5.1" surround)
-    if (widget.contentType == 'movie') {
+    if ((_effectiveContentType ?? widget.contentType) == 'movie') {
       return (season: null, episode: null);
     }
     // Prefer current playlist entry — correct even after auto-advance
@@ -2094,21 +2357,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       }
     }
     // Fallback: explicit launch args (single-stream series playback)
-    if (widget.contentSeason != null && widget.contentEpisode != null) {
-      return (season: widget.contentSeason, episode: widget.contentEpisode);
+    final effectiveSeason = _effectiveContentSeason ?? widget.contentSeason;
+    final effectiveEpisode = _effectiveContentEpisode ?? widget.contentEpisode;
+    if (effectiveSeason != null && effectiveEpisode != null) {
+      return (season: effectiveSeason, episode: effectiveEpisode);
     }
     final info = SeriesParser.parseFilename(widget.title);
     return (season: info.season, episode: info.episode);
   }
 
   void _traktScrobble(String action) {
-    if (_validationGateActive) return;
-    if (!_traktScrobbleEnabled || widget.contentImdbId == null) return;
-    final imdbId = widget.contentImdbId!;
+    if (!_playerProfileCurrent || _validationGateActive || (_castRemoteActive &&
+        !_acceptedCastSnapshotCurrent(_castService.snapshot))) return;
+    final imdbId = _effectiveContentImdbId ?? widget.contentImdbId;
+    final contentType = _effectiveContentType ?? widget.contentType;
+    if (!_traktScrobbleEnabled || imdbId == null) return;
     final progress = _traktProgress();
     final se = _traktSeasonEpisode();
     if (!TraktService.isScrobbleReady(
-      contentType: widget.contentType,
+      contentType: contentType,
       season: se.season,
       episode: se.episode,
     )) {
@@ -2122,31 +2389,31 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _traktLastScrobbleAction = action;
     switch (action) {
       case 'start':
-        TraktService.instance.scrobbleStart(
+        _queueTrackerEffect(_traktEffects, () => TraktService.instance.scrobbleStart(
           imdbId,
           progress,
           season: se.season,
           episode: se.episode,
-          contentType: widget.contentType,
-        );
+          contentType: contentType,
+        ));
         break;
       case 'pause':
-        TraktService.instance.scrobblePause(
+        _queueTrackerEffect(_traktEffects, () => TraktService.instance.scrobblePause(
           imdbId,
           progress,
           season: se.season,
           episode: se.episode,
-          contentType: widget.contentType,
-        );
+          contentType: contentType,
+        ));
         break;
       case 'stop':
-        TraktService.instance.scrobbleStop(
+        _queueTrackerEffect(_traktEffects, () => TraktService.instance.scrobbleStop(
           imdbId,
           progress,
           season: se.season,
           episode: se.episode,
-          contentType: widget.contentType,
-        );
+          contentType: contentType,
+        ), historical: true);
         break;
     }
   }
@@ -2155,17 +2422,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   void _startTraktHeartbeat() {
     _traktHeartbeatTimer?.cancel();
     _traktHeartbeatTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      final imdbId = _effectiveContentImdbId ?? widget.contentImdbId;
+      final contentType = _effectiveContentType ?? widget.contentType;
       if (_validationGateActive ||
           !_traktScrobbleEnabled ||
-          widget.contentImdbId == null) {
+          imdbId == null) {
         return;
       }
-      if (!_isPlaying || _duration.inMilliseconds <= 0) return;
-      final imdbId = widget.contentImdbId!;
+      if (!_authoritativePlaying ||
+          _authoritativeDuration.inMilliseconds <= 0) return;
       final progress = _traktProgress();
       final se = _traktSeasonEpisode();
       if (!TraktService.isScrobbleReady(
-        contentType: widget.contentType,
+        contentType: contentType,
         season: se.season,
         episode: se.episode,
       )) {
@@ -2174,13 +2443,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       // Trakt rejects start/pause above 80% — send stop and end heartbeat
       if (progress > 80) {
         _traktLastScrobbleAction = 'stop';
-        TraktService.instance.scrobbleStop(
+        _queueTrackerEffect(_traktEffects, () => TraktService.instance.scrobbleStop(
           imdbId,
           progress,
           season: se.season,
           episode: se.episode,
-          contentType: widget.contentType,
-        );
+          contentType: contentType,
+        ), historical: true);
         debugPrint(
           'Trakt: Heartbeat stop at ${progress.toStringAsFixed(1)}% (>80%)',
         );
@@ -2189,13 +2458,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       }
       // Force-send start (bypass dedup) to keep session alive and checkpoint progress
       _traktLastScrobbleAction = 'start';
-      TraktService.instance.scrobbleStart(
+      _queueTrackerEffect(_traktEffects, () => TraktService.instance.scrobbleStart(
         imdbId,
         progress,
         season: se.season,
         episode: se.episode,
-        contentType: widget.contentType,
-      );
+        contentType: contentType,
+      ));
       debugPrint(
         'Trakt: Heartbeat scrobble at ${progress.toStringAsFixed(1)}%',
       );
@@ -2215,8 +2484,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _analyticsHeartbeatTimer = Timer.periodic(
       AnalyticsService.heartbeatInterval,
       (_) {
-        if (_isPlaying) {
-          AnalyticsService.playbackHeartbeat('dart');
+        if (_authoritativePlaying) {
+          AnalyticsService.playbackHeartbeat(
+            _playbackOwnership.acceptsCastTelemetry ? 'cast' : 'dart',
+          );
         }
       },
     );
@@ -2233,17 +2504,22 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _stremioTvStartupSeek.cancel();
     _resumeWriteGuard.noteUserSeek();
     if (_validationGateActive) return;
-    if (!_traktScrobbleEnabled || widget.contentImdbId == null) return;
-    if (!_isPlaying || _duration.inMilliseconds <= 0) return;
-    final imdbId = widget.contentImdbId!;
+    final imdbId = _effectiveContentImdbId ?? widget.contentImdbId;
+    final contentType = _effectiveContentType ?? widget.contentType;
+    if (!_traktScrobbleEnabled || imdbId == null) return;
+    if (!_authoritativePlaying ||
+        _authoritativeDuration.inMilliseconds <= 0) return;
     final progress =
-        (seekTarget.inMilliseconds / _duration.inMilliseconds * 100).clamp(
+        (seekTarget.inMilliseconds /
+                _authoritativeDuration.inMilliseconds *
+                100)
+            .clamp(
           0.0,
           100.0,
         );
     final se = _traktSeasonEpisode();
     if (!TraktService.isScrobbleReady(
-      contentType: widget.contentType,
+      contentType: contentType,
       season: se.season,
       episode: se.episode,
     )) {
@@ -2252,23 +2528,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     // Trakt rejects start above 80% — send stop instead
     if (progress > 80) {
       _traktLastScrobbleAction = 'stop';
-      TraktService.instance.scrobbleStop(
+      _queueTrackerEffect(_traktEffects, () => TraktService.instance.scrobbleStop(
         imdbId,
         progress,
         season: se.season,
         episode: se.episode,
-        contentType: widget.contentType,
-      );
+        contentType: contentType,
+      ), historical: true);
       _stopTraktHeartbeat();
     } else {
       _traktLastScrobbleAction = 'start';
-      TraktService.instance.scrobbleStart(
+      _queueTrackerEffect(_traktEffects, () => TraktService.instance.scrobbleStart(
         imdbId,
         progress,
         season: se.season,
         episode: se.episode,
-        contentType: widget.contentType,
-      );
+        contentType: contentType,
+      ));
       _startTraktHeartbeat();
     }
   }
@@ -2280,8 +2556,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   Future<void> _initSimklScrobble() async {
     if (!widget.simklScrobble) return;
-    if (widget.contentImdbId == null) return;
-    if (widget.contentType != 'movie' && widget.contentType != 'series') return;
+    final contentId = _effectiveContentImdbId ?? widget.contentImdbId;
+    final contentType = _effectiveContentType ?? widget.contentType;
+    if (contentId == null) return;
+    if (contentType != 'movie' && contentType != 'series') return;
     final policy = (await TrackingSourcePolicy.load()).forContent(_effectiveContentImdbId);
     _simklScrobbleEnabled =
         policy.scrobbles(TrackingSource.simkl) &&
@@ -2298,8 +2576,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     // ('start'), which now routes to a pause POST.)
     if (!_validationGateActive &&
         _simklScrobbleEnabled &&
-        _isPlaying &&
-        _duration > Duration.zero) {
+        _authoritativePlaying &&
+        _authoritativeDuration > Duration.zero) {
       _simklLastScrobbleAction = 'start';
       _startSimklHeartbeat();
     }
@@ -2311,13 +2589,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   /// (null, null), so this only blocks the series case. (Trakt has the same
   /// latent gap; this guard is Simkl-only per the no-touch-Trakt convention.)
   bool _simklSeriesSEUnresolved(({int? season, int? episode}) se) =>
-      widget.contentType == 'series' &&
+      (_effectiveContentType ?? widget.contentType) == 'series' &&
       (se.season == null || se.episode == null);
 
   void _simklScrobble(String action) {
-    if (_validationGateActive) return;
-    if (!_simklScrobbleEnabled || widget.contentImdbId == null) return;
-    final imdbId = widget.contentImdbId!;
+    if (!_playerProfileCurrent || _validationGateActive || (_castRemoteActive &&
+        !_acceptedCastSnapshotCurrent(_castService.snapshot))) return;
+    final imdbId = _effectiveContentImdbId ?? widget.contentImdbId;
+    if (!_simklScrobbleEnabled || imdbId == null) return;
     final progress = _traktProgress();
     final se = _traktSeasonEpisode();
     if (_simklSeriesSEUnresolved(se)) return;
@@ -2336,20 +2615,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       // a pause checkpoint.
       case 'start':
       case 'pause':
-        SimklService.instance.scrobblePause(
+        _queueTrackerEffect(_simklEffects, () => SimklService.instance.scrobblePause(
           imdbId,
           progress,
           season: se.season,
           episode: se.episode,
-        );
+        ));
         break;
       case 'stop':
-        SimklService.instance.scrobbleStop(
+        _queueTrackerEffect(_simklEffects, () => SimklService.instance.scrobbleStop(
           imdbId,
           progress,
           season: se.season,
           episode: se.episode,
-        );
+        ), historical: true);
         break;
     }
   }
@@ -2364,24 +2643,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   void _startSimklHeartbeat() {
     _simklHeartbeatTimer?.cancel();
     _simklHeartbeatTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      final imdbId = _effectiveContentImdbId ?? widget.contentImdbId;
       if (_validationGateActive ||
           !_simklScrobbleEnabled ||
-          widget.contentImdbId == null) {
+          imdbId == null) {
         return;
       }
-      if (!_isPlaying || _duration.inMilliseconds <= 0) return;
-      final imdbId = widget.contentImdbId!;
+      if (!_authoritativePlaying ||
+          _authoritativeDuration.inMilliseconds <= 0) return;
       final progress = _traktProgress();
       final se = _traktSeasonEpisode();
       if (_simklSeriesSEUnresolved(se)) return;
       if (progress > 80) {
         _simklLastScrobbleAction = 'stop';
-        SimklService.instance.scrobbleStop(
+        _queueTrackerEffect(_simklEffects, () => SimklService.instance.scrobbleStop(
           imdbId,
           progress,
           season: se.season,
           episode: se.episode,
-        );
+        ), historical: true);
         debugPrint(
           'Simkl: Heartbeat stop at ${progress.toStringAsFixed(1)}% (>80%)',
         );
@@ -2395,12 +2675,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       // make the user's real pause dedup-suppress at _simklScrobble and strand
       // the true pause position at this (older) heartbeat %.
       _simklLastScrobbleAction = 'start';
-      SimklService.instance.scrobblePause(
+      _queueTrackerEffect(_simklEffects, () => SimklService.instance.scrobblePause(
         imdbId,
         progress,
         season: se.season,
         episode: se.episode,
-      );
+      ));
       debugPrint(
         'Simkl: Heartbeat pause checkpoint at ${progress.toStringAsFixed(1)}%',
       );
@@ -2421,11 +2701,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   /// progress either way.
   void _simklScrobbleSeek(Duration seekTarget) {
     if (_validationGateActive) return;
-    if (!_simklScrobbleEnabled || widget.contentImdbId == null) return;
-    if (!_isPlaying || _duration.inMilliseconds <= 0) return;
-    final imdbId = widget.contentImdbId!;
+    final imdbId = _effectiveContentImdbId ?? widget.contentImdbId;
+    if (!_simklScrobbleEnabled || imdbId == null) return;
+    if (!_authoritativePlaying ||
+        _authoritativeDuration.inMilliseconds <= 0) return;
     final progress =
-        (seekTarget.inMilliseconds / _duration.inMilliseconds * 100).clamp(
+        (seekTarget.inMilliseconds /
+                _authoritativeDuration.inMilliseconds *
+                100)
+            .clamp(
           0.0,
           100.0,
         );
@@ -2433,36 +2717,37 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     if (_simklSeriesSEUnresolved(se)) return;
     if (progress > 80 && _simklLastScrobbleAction != 'stop') {
       _simklLastScrobbleAction = 'stop';
-      SimklService.instance.scrobbleStop(
+      _queueTrackerEffect(_simklEffects, () => SimklService.instance.scrobbleStop(
         imdbId,
         progress,
         season: se.season,
         episode: se.episode,
-      );
+      ), historical: true);
       _stopSimklHeartbeat();
     } else if (progress <= 80 && _simklLastScrobbleAction == 'stop') {
       // Seeked back under 80% after a finalize — re-establish a RESUMABLE
       // session via pause (start would wipe it and persist nothing) and resume
       // the heartbeat.
       _simklLastScrobbleAction = 'pause';
-      SimklService.instance.scrobblePause(
+      _queueTrackerEffect(_simklEffects, () => SimklService.instance.scrobblePause(
         imdbId,
         progress,
         season: se.season,
         episode: se.episode,
-      );
+      ));
       _startSimklHeartbeat();
     }
   }
 
   MdblistScrobbleTarget? _mdblistTarget() {
-    final imdbId = widget.contentImdbId;
+    final imdbId = _effectiveContentImdbId ?? widget.contentImdbId;
+    final contentType = _effectiveContentType ?? widget.contentType;
     if (imdbId == null || imdbId.isEmpty) return null;
     final ids = MdblistMediaIds.forContent(imdbId);
-    if (widget.contentType == 'movie') {
+    if (contentType == 'movie') {
       return MdblistScrobbleTarget.movie(ids);
     }
-    if (widget.contentType != 'series') return null;
+    if (contentType != 'series') return null;
     final se = _traktSeasonEpisode();
     if (se.season == null || se.episode == null) return null;
     return MdblistScrobbleTarget.episode(
@@ -2502,8 +2787,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     // Re-resolving it here could disagree with that launch snapshot and leave
     // the play tracked nowhere; the session capability below still prevents a
     // stale profile/account from receiving writes.
-    final target = _mdblistTarget();
-    if (target == null) {
+    if (_mdblistTarget() == null) {
       debugPrint('[MDBListDiag] player init skipped: invalid target metadata');
       return;
     }
@@ -2513,12 +2797,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       debugPrint('[MDBListDiag] player init abandoned: player unmounted');
       return;
     }
+    final target = _mdblistTarget();
+    if (target == null || !_playerProfileCurrent || _castExplicitRouteExit) return;
     final session = MdblistScrobbleSession.forService(
       service: MdblistService.instance,
       target: target,
       capability: capability,
     );
-    session.updatePosition(_position, _duration);
+    session.updatePosition(_authoritativePosition, _authoritativeDuration);
     _mdblistSession = session;
     debugPrint(
       '[MDBListDiag] player session ready imdb=${target.ids.imdb} '
@@ -2526,7 +2812,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       'positionMs=${_position.inMilliseconds} '
       'durationMs=${_duration.inMilliseconds}',
     );
-    if (!_validationGateActive && _isPlaying && _duration > Duration.zero) {
+    if (!_validationGateActive &&
+        _authoritativePlaying &&
+        _authoritativeDuration > Duration.zero) {
       session.play();
     }
   }
@@ -2534,11 +2822,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   void _updateMdblistPosition() {
     if (_validationGateActive) return;
     // Held-target substitution, same reason as _traktProgress.
-    _mdblistSession?.updatePosition(_persistablePosition, _duration);
+    _mdblistSession?.updatePosition(
+      _persistablePosition,
+      _authoritativeDuration,
+    );
   }
 
   void _mdblistPlay() {
-    if (_validationGateActive) return;
+    if (!_playerProfileCurrent || _validationGateActive) return;
     _updateMdblistPosition();
     _mdblistSession?.play();
   }
@@ -2567,13 +2858,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   void _mdblistScrobbleSeek(Duration target) {
     if (_validationGateActive) return;
-    _mdblistSession?.seek(target, _duration);
+    _mdblistSession?.seek(target, _authoritativeDuration);
   }
 
   void _resumeTrackingAfterValidationGate() {
     if (!mounted || _validationGateActive) return;
     _updateMdblistPosition();
-    if (!_isPlaying || _duration <= Duration.zero) return;
+    if (!_authoritativePlaying || _authoritativeDuration <= Duration.zero) return;
     _traktScrobble('start');
     if (_traktLastScrobbleAction == 'start') _startTraktHeartbeat();
     if (_simklScrobbleEnabled) {
@@ -2587,12 +2878,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   Future<void> _switchMdblistTarget() async {
     if (_validationGateActive) return;
+    final permitted = _capturePlayerEffectGuard();
     final target = _mdblistTarget();
     if (target == null) {
       _mdblistSession?.exit();
       return;
     }
-    await _mdblistSession?.switchTarget(target);
+    await _mdblistSession?.switchTarget(target, permitted: permitted);
   }
 
   /// The current episode's cross-device Trakt progress percent (0-100), or null.
@@ -3841,7 +4133,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       );
     });
     _posSub = player.stream.position.listen((d) {
-      if (!isCurrent()) return;
+      if (!isCurrent() || !_playbackOwnership.acceptsLocalTelemetry) return;
       if (Platform.isIOS && d.inSeconds != _lastIosPipPositionSecond) {
         _lastIosPipPositionSecond = d.inSeconds;
         _pushPipState();
@@ -3878,7 +4170,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       });
     }
     _durSub = player.stream.duration.listen((d) {
-      if (!isCurrent()) return;
+      if (!isCurrent() || !_playbackOwnership.acceptsLocalTelemetry) return;
       final hadDuration = _duration > Duration.zero;
       _duration = d;
       final startupOffset = _stremioTvStartupSeek.take(
@@ -3916,17 +4208,22 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       }
       final wasPlaying = _isPlaying;
       _isPlaying = p;
+      final localOwnsTelemetry = _playbackOwnership.acceptsLocalTelemetry;
       _observeServerWatch();
       ProfileLockController.instance.setPlaybackActive(p);
       _syncWakelock(p);
       _pushPipState();
       if (p) _noteLiveChannelPlaying();
-      if (!_validationGateActive && p && _duration > Duration.zero) {
+      if (localOwnsTelemetry &&
+          !_validationGateActive &&
+          p &&
+          _duration > Duration.zero) {
         _traktScrobble('start');
         if (_traktLastScrobbleAction == 'start') {
           _startTraktHeartbeat();
         }
-      } else if (!_validationGateActive &&
+      } else if (localOwnsTelemetry &&
+          !_validationGateActive &&
           !p &&
           wasPlaying &&
           !_isTransitioning &&
@@ -3934,13 +4231,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         _traktScrobble('pause');
         _stopTraktHeartbeat();
       }
-      if (!_validationGateActive &&
+      if (localOwnsTelemetry &&
+          !_validationGateActive &&
           _simklScrobbleEnabled &&
           p &&
           _duration > Duration.zero) {
         _simklLastScrobbleAction = 'start';
         _startSimklHeartbeat();
-      } else if (!_validationGateActive &&
+      } else if (localOwnsTelemetry &&
+          !_validationGateActive &&
           !p &&
           wasPlaying &&
           !_isTransitioning &&
@@ -3948,9 +4247,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         _simklScrobble('pause');
         _stopSimklHeartbeat();
       }
-      if (!_validationGateActive && p && _duration > Duration.zero) {
+      if (localOwnsTelemetry &&
+          !_validationGateActive &&
+          p &&
+          _duration > Duration.zero) {
         _mdblistPlay();
-      } else if (!_validationGateActive &&
+      } else if (localOwnsTelemetry &&
+          !_validationGateActive &&
           !p &&
           wasPlaying &&
           !_isTransitioning) {
@@ -3983,7 +4286,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       setState(() {});
     });
     _completedSub = player.stream.completed.listen((done) {
-      if (done && isCurrent()) {
+      if (done && isCurrent() && _playbackOwnership.acceptsLocalTelemetry) {
         PlayerVisibility.playbackState(this, ready: false);
         _iptvDiag.onPlaybackEnded(_position);
         _onPlaybackEnded();
@@ -4903,7 +5206,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         );
         await DirectSourceAuthorization.authorize(watchSource);
       }
-      if (_screenDisposed || !mounted || watchEpoch != _watchOpenEpoch ||
+      if (_screenDisposed || !mounted || !_playerProfileCurrent || watchEpoch != _watchOpenEpoch ||
           request?.isCurrent == false) {
         return;
       }
@@ -6069,10 +6372,491 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _showBufferingIndicator.value = false;
   }
 
+  CastMediaRequest? _buildCastResolvedMediaRequest({
+    required String url,
+    required String title,
+    String? contentType,
+    int? season,
+    int? episode,
+    Map<String, String>? headers,
+    String? separateAudioUrl,
+    Duration position = Duration.zero,
+    bool autoplay = true,
+    bool isLive = false,
+    List<CastTextTrackRequest> textTracks = const <CastTextTrackRequest>[],
+  }) {
+    final compatibility = CastSourceCompatibility.classify(
+      url: url,
+      headers: headers,
+      separateAudioUrl: separateAudioUrl,
+    );
+    if (!compatibility.canAttempt) return null;
+    final series = contentType == 'series' || season != null || episode != null;
+    return CastMediaRequest(
+      url: url,
+      mimeType: CastMediaRequest.inferMimeType(url, fallbackName: title),
+      title: title,
+      subtitle: series
+          ? [
+              if (season != null) 'S$season',
+              if (episode != null) 'E$episode',
+            ].join(' ')
+          : null,
+      seriesTitle: series
+          ? (_effectiveContentTitle ?? widget.contentTitle ?? widget.title)
+          : null,
+      season: season,
+      episode: episode,
+      posterUrl: widget.posterUrl ?? _activeCastRequest?.posterUrl,
+      backdropUrl: _activeCastRequest?.backdropUrl,
+      position: position,
+      duration: null,
+      headers: Map<String, String>.from(
+        headers ?? const <String, String>{},
+      ),
+      textTracks: textTracks,
+      autoplay: autoplay,
+      isLive: isLive,
+    );
+  }
+
+  void _stopCastTrackingForNavigation(CastPlayerTrackingTarget outgoing) {
+    if (_lastCastPlaybackState == CastPlaybackState.ended) return;
+    _stopTraktHeartbeat();
+    _stopSimklHeartbeat();
+    final imdbId = outgoing.imdbId;
+    if (imdbId != null && _traktScrobbleEnabled &&
+        _traktLastScrobbleAction != 'stop' && TraktService.isScrobbleReady(
+          contentType: outgoing.contentType, season: outgoing.season,
+          episode: outgoing.episode)) {
+      _traktLastScrobbleAction = 'stop';
+      unawaited(_queueTrackerEffect(_traktEffects, () => TraktService.instance.scrobbleStop(imdbId, outgoing.progress,
+        season: outgoing.season, episode: outgoing.episode,
+        contentType: outgoing.contentType), historical: true));
+    }
+    if (imdbId != null && _simklScrobbleEnabled &&
+        _simklLastScrobbleAction != 'stop' &&
+        (outgoing.contentType != 'series' ||
+          (outgoing.season != null && outgoing.episode != null))) {
+      _simklLastScrobbleAction = 'stop';
+      unawaited(_queueTrackerEffect(_simklEffects, () => SimklService.instance.scrobbleStop(imdbId, outgoing.progress,
+        season: outgoing.season, episode: outgoing.episode), historical: true));
+    }
+    _mdblistSession?.updatePosition(outgoing.position, outgoing.duration);
+    _mdblistSession?.exit();
+    _lastCastPlaybackState = CastPlaybackState.connected;
+  }
+
+  Future<bool> _commitCastPlaylistEpisode(
+    int index,
+    String url, {
+    required bool autoAdvance,
+  }) async {
+    final playlist = _activePlaylist;
+    if (playlist == null || index < 0 || index >= playlist.length) return false;
+    final entry = playlist[index];
+    final parsed = SeriesParser.parseFilename(entry.title);
+    final season = parsed.season;
+    final episode = parsed.episode;
+    final request = _buildCastResolvedMediaRequest(
+      url: url,
+      title: entry.title,
+      contentType: _effectiveContentType,
+      season: season,
+      episode: episode,
+      headers: entry.httpHeaders,
+      separateAudioUrl: entry.audioUrl,
+      autoplay: true,
+    );
+    if (request == null) return false;
+
+    final committed = await _loadCastReplacement(
+      request,
+      failureCode: 'CAST_NEXT_EPISODE_FAILED',
+      failureMessage: 'The next episode could not be loaded on Cast.',
+      showFailure: false,
+      rollbackOnFailure: !autoAdvance,
+      navigationGeneration: _castNavigationGeneration,
+    );
+    if (!committed || !mounted || !_castLatestLoadCommitted) return false;
+
+    setState(() {
+      _currentIndex = index;
+      _currentStreamUrl = url;
+      _activeHttpHeaders = entry.httpHeaders;
+      _isAutoAdvancing = autoAdvance;
+      _dynamicTitle = entry.title;
+    });
+    _castExtraSubtitle = null;
+    _resetSubtitleState();
+    _resetSkipSegmentState();
+    _resetLocalCompletionState();
+    final committedGeneration = _castNavigationGeneration;
+    final committedIdentity = _castEffectTicket();
+    await _switchMdblistTarget();
+    if (!_castIntentCurrent(committedGeneration) || !committedIdentity.isCurrent) return false;
+    unawaited(_preloadEpisodeInfo());
+    _lastCastPlaybackState = CastPlaybackState.connected;
+    _syncCastTrackingState(_castService.snapshot, force: true);
+    return true;
+  }
+
+  Future<({List<PlaylistEntry> playlist, int index, String url})?>
+  _resolveCastEpisodeCandidate(
+    Torrent source,
+    int season,
+    int episode,
+  ) async {
+    final fetcher = widget.seriesSourceFetcher;
+    if (fetcher == null ||
+        source.streamType == StreamType.externalUrl ||
+        !await fetcher.allowsCandidate(source)) {
+      return null;
+    }
+
+    List<PlaylistEntry>? playlist;
+    final playlistResolver = widget.resolveSourceToPlaylist;
+    if (playlistResolver != null) {
+      try {
+        playlist = await playlistResolver(source);
+      } catch (_) {
+        playlist = null;
+      }
+    } else if (source.directUrl?.trim().isNotEmpty == true) {
+      playlist = [
+        PlaylistEntry(
+          url: source.directUrl!.trim(),
+          title: source.name,
+          httpHeaders: source.httpHeaders,
+        ),
+      ];
+    }
+    if (playlist == null || playlist.isEmpty) return null;
+
+    var normalized = playlist;
+    var targetIndex = 0;
+    if (normalized.length == 1) {
+      final info = SeriesParser.parseFilename(normalized.first.title);
+      if (info.season == null || info.episode == null) {
+        normalized = [
+          normalized.first.copyWithTitle(
+            'S${_pad2(season)}E${_pad2(episode)} ${normalized.first.title}',
+          ),
+        ];
+      } else if (info.season != season || info.episode != episode) {
+        return null;
+      }
+    } else {
+      final parsed = SeriesPlaylist.fromPlaylistEntries(
+        normalized,
+        collectionTitle: widget.title,
+        forceSeries: true,
+      );
+      targetIndex = parsed.findOriginalIndexBySeasonEpisode(season, episode);
+      if (targetIndex < 0) return null;
+    }
+
+    final entry = normalized[targetIndex];
+    final url = entry.url.trim();
+    if (url.isEmpty) return null;
+    final compatibility = CastSourceCompatibility.classify(
+      url: url,
+      headers: entry.httpHeaders ?? source.httpHeaders,
+      separateAudioUrl: entry.audioUrl,
+    );
+    if (!compatibility.canAttempt) return null;
+    return (playlist: normalized, index: targetIndex, url: url);
+  }
+
+  Future<bool> _commitCastFetchedEpisode(
+    int sourceIndex,
+    Torrent source,
+    ({List<PlaylistEntry> playlist, int index, String url}) resolved,
+    int season,
+    int episode, {
+    required bool autoAdvance,
+  }) async {
+    final entry = resolved.playlist[resolved.index];
+    final request = _buildCastResolvedMediaRequest(
+      url: resolved.url,
+      title: entry.title,
+      contentType: 'series',
+      season: season,
+      episode: episode,
+      headers: entry.httpHeaders ?? source.httpHeaders,
+      separateAudioUrl: entry.audioUrl,
+      autoplay: true,
+    );
+    if (request == null) return false;
+
+    final committed = await _loadCastReplacement(
+      request,
+      failureCode: 'CAST_NEXT_EPISODE_FAILED',
+      failureMessage: 'This candidate could not play the next episode on Cast.',
+      showFailure: false,
+      rollbackOnFailure: !autoAdvance,
+      navigationGeneration: _castNavigationGeneration,
+    );
+    if (!committed || !mounted || !_castLatestLoadCommitted) return false;
+
+    setState(() {
+      _activePlaylist = resolved.playlist;
+      _currentIndex = resolved.index;
+      _currentSourceIndex = sourceIndex;
+      _currentStreamUrl = resolved.url;
+      _activeHttpHeaders = entry.httpHeaders ?? source.httpHeaders;
+      _cachedSeriesPlaylist = null;
+      _playlistIdentityToken++;
+      _dynamicTitle = entry.title;
+      _isAutoAdvancing = autoAdvance;
+    });
+    _castExtraSubtitle = null;
+    _resetSubtitleState();
+    _resetSkipSegmentState();
+    _resetLocalCompletionState();
+    final committedGeneration = _castNavigationGeneration;
+    final committedIdentity = _castEffectTicket();
+    await _switchMdblistTarget();
+    if (!_castIntentCurrent(committedGeneration) || !committedIdentity.isCurrent) return false;
+    _episodeMetadataReady = _preloadEpisodeInfo();
+    unawaited(_commitValidatedStremioSource(source));
+    _lastCastPlaybackState = CastPlaybackState.connected;
+    _syncCastTrackingState(_castService.snapshot, force: true);
+    return true;
+  }
+
+  Future<bool> _resolveAndCastAdjacentEpisode({
+    required bool autoAdvance,
+    (int, int)? requestedTarget,
+  }) async {
+    final fetcher = widget.seriesSourceFetcher;
+    if (fetcher == null) return false;
+    final generation = _castNavigationGeneration;
+    final origin = _castEffectTicket();
+    bool stillCurrent() => _castIntentCurrent(generation) && origin.isCurrent;
+    final current = _traktSeasonEpisode();
+    if (current.season == null || current.episode == null) return false;
+
+    var next = requestedTarget ?? _adjacentEpisode(current.season!, current.episode!, 1);
+    if (next == null) {
+      final resolved = await _resolveAdjacentWithCachedGuide(
+        current.season!,
+        current.episode!,
+        1,
+      );
+      if (resolved != null) next = (resolved.season, resolved.episode);
+    }
+    if (next == null &&
+        fetcher.resolveAdjacentEpisode == null &&
+        widget.contentImdbId != null) {
+      final episode = await NextEpisodeService.findNextEpisode(
+        widget.contentImdbId!,
+        current.season!,
+        current.episode!,
+      );
+      if (episode != null) next = (episode.season, episode.episode);
+    }
+    if (next == null || !stillCurrent()) return false;
+
+    final season = next.$1;
+    final episode = next.$2;
+    final attempted = <String>{};
+
+    Future<bool> trySources(List<Torrent> sources) async {
+      for (var i = 0; i < sources.length; i++) {
+        if (!stillCurrent()) return false;
+        final source = sources[i];
+        if (!SeriesSourceFetcher.visibleForEpisode(source, season, episode) ||
+            source.streamType == StreamType.externalUrl) {
+          continue;
+        }
+        final key = SeriesSourceFetcher.sourceKey(source);
+        if (!attempted.add(key)) continue;
+        final resolved = await _resolveCastEpisodeCandidate(
+          source,
+          season,
+          episode,
+        );
+        if (!stillCurrent()) return false;
+        if (resolved == null) continue;
+        final sourceIndex = sources.indexWhere(
+          (candidate) =>
+              SeriesSourceFetcher.sourceKey(candidate) == key,
+        );
+        if (await _commitCastFetchedEpisode(
+          sourceIndex < 0 ? 0 : sourceIndex,
+          source,
+          resolved,
+          season,
+          episode,
+          autoAdvance: autoAdvance,
+        )) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    final existing = _effectiveSources ?? const <Torrent>[];
+    if (await trySources(existing)) return true;
+    if (!stillCurrent()) return false;
+
+    List<Torrent>? episodes;
+    try {
+      episodes = await fetcher.fetch(
+        SeriesSourceFetcher.modeEpisodes,
+        season: season,
+        episode: episode,
+      );
+    } catch (_) {
+      episodes = null;
+    }
+    if (!stillCurrent()) return false;
+    if (episodes != null && episodes.isNotEmpty) {
+      final merged = SeriesSourceFetcher.mergeSources(existing, episodes);
+      if (!stillCurrent()) return false;
+      setState(() => _augmentedSources = merged);
+      if (await trySources(merged)) return true;
+    }
+    if (!stillCurrent()) return false;
+
+    List<Torrent>? packs;
+    try {
+      packs = await fetcher.fetch(
+        SeriesSourceFetcher.modePacks,
+        season: season,
+        episode: episode,
+      );
+    } catch (_) {
+      packs = null;
+    }
+    if (!stillCurrent()) return false;
+    if (packs != null && packs.isNotEmpty) {
+      final base = _effectiveSources ?? existing;
+      final merged = SeriesSourceFetcher.mergeSources(base, packs);
+      if (!stillCurrent()) return false;
+      setState(() => _augmentedSources = merged);
+      if (await trySources(merged)) return true;
+    }
+    return false;
+  }
+
+  Future<bool> _goToNextEpisodeOnCast({required bool autoAdvance}) async {
+    if (!_castRemoteActive || !_castService.connected) return false;
+    final generation = _beginCastNavigation();
+    _castAdvanceInProgress = true;
+    try {
+      // Never stop current scrobbling just for ATTEMPTING a next request.
+      // A rejected load must not briefly stop/restart the previous content.
+      final nextIndex = _findNextEpisodeIndex();
+      if (nextIndex != -1 && _activePlaylist != null) {
+        final entry = _activePlaylist![nextIndex];
+        var url = entry.url;
+        if (url.isEmpty) {
+          try {
+            url = await _resolvePlaylistEntryUrl(nextIndex);
+          } catch (_) {
+            url = '';
+          }
+        }
+        if (!mounted || generation != _castNavigationGeneration) return false;
+        if (url.isNotEmpty &&
+            await _commitCastPlaylistEpisode(
+              nextIndex,
+              url,
+              autoAdvance: autoAdvance,
+            )) {
+          return true;
+        }
+      }
+
+      if (_hasStremioTvNext) {
+        final handled = await _goToNextStremioTvSlot(
+          resumeCurrentOnFailure: !autoAdvance,
+          navigationGeneration: generation,
+        );
+        if (!mounted || generation != _castNavigationGeneration) return false;
+        if (handled && _castRemoteActive) {
+          return true;
+        }
+      }
+
+      if (await _resolveAndCastAdjacentEpisode(autoAdvance: autoAdvance)) {
+        return mounted && generation == _castNavigationGeneration;
+      }
+      if (!mounted || generation != _castNavigationGeneration) return false;
+
+      if (widget.requestMagicNext != null) {
+        try {
+          final result = await widget.requestMagicNext!();
+          if (!mounted || generation != _castNavigationGeneration) return false;
+          final url = result?['url']?.toString() ?? '';
+          final title = result?['title']?.toString() ?? '';
+          if (url.isNotEmpty) {
+            final parsed = SeriesParser.parseFilename(title);
+            final request = _buildCastResolvedMediaRequest(
+              url: url,
+              title: title.isEmpty ? _currentPlaybackTitleForIdentity() : title,
+              contentType: _effectiveContentType,
+              season: parsed.season,
+              episode: parsed.episode,
+              autoplay: true,
+            );
+            if (request != null &&
+                await _loadCastReplacement(
+                  request,
+                  failureCode: 'CAST_NEXT_EPISODE_FAILED',
+                  failureMessage:
+                      'Debrify TV could not load the next item on Cast.',
+                  showFailure: false,
+                  rollbackOnFailure: !autoAdvance,
+                  navigationGeneration: generation,
+                )) {
+              if (!mounted || generation != _castNavigationGeneration) return false;
+                        setState(() {
+                _currentStreamUrl = url;
+                if (title.isNotEmpty) _dynamicTitle = title;
+                _isAutoAdvancing = autoAdvance;
+              });
+              _castExtraSubtitle = null;
+              _resetSubtitleState();
+              _resetSkipSegmentState();
+              _resetLocalCompletionState();
+              _lastCastPlaybackState = CastPlaybackState.connected;
+              _syncCastTrackingState(_castService.snapshot, force: true);
+              return true;
+            }
+          }
+        } catch (_) {
+          // Final structured error is emitted below; do not leak provider data.
+        }
+      }
+
+      _showCastFailure(
+        const CastException(
+          'CAST_NEXT_EPISODE_FAILED',
+          'No playable next episode could be loaded on Cast.',
+        ),
+      );
+      return false;
+    } finally {
+      if (generation == _castNavigationGeneration) _castAdvanceInProgress = false;
+      if (generation == _castNavigationGeneration && !autoAdvance && _castRemoteActive) {
+        _syncCastTrackingState(_castService.snapshot);
+      }
+    }
+  }
+
   /// Navigate to next episode
   Future<void> _goToNextEpisode() async {
     // Check if widget is still mounted before any state changes
     if (!mounted) return;
+    if (_castRemoteActive) {
+      await _goToNextEpisodeOnCast(autoAdvance: false);
+      return;
+    }
+    // Handoff windows must never enter the local next/open path.
+    if (!_playbackOwnership.isLocal) return;
 
     // Show black screen during transition to hide previous frame
     _clearBufferingIndicator();
@@ -9198,10 +9982,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     });
   }
 
+  Object _sourceFetchAuthority() => (
+    ProfileRuntime.scope.value, _playerProfileScope, _playbackOwnership.owner,
+    _castNavigationGeneration, _episodeNavigationGeneration,
+    _playlistIdentityToken, _currentIndex, _currentStreamUrl,
+    _effectiveContentImdbId,
+  );
+
   Future<String?> Function(Torrent) _buildSourceSheetResolver() {
     if (widget.resolveSourceToPlaylist != null) {
       return (Torrent torrent) async {
+        final permitted = _capturePlayerEffectGuard();
+        if (!_playbackOwnership.isLocal) return null;
         final playlist = await widget.resolveSourceToPlaylist!(torrent);
+        if (!permitted() || !_playbackOwnership.isLocal) return null;
         if (playlist == null || playlist.isEmpty) return null;
         _pendingSourcePlaylist = playlist;
         final firstUrl = playlist.first.url;
@@ -9211,13 +10005,63 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     return _effectiveResolver!;
   }
 
-  Future<void> _handleSourceSelected(int index, String url) async {
+
+  // Resolve with the ticket captured by SourceSheet at the user's tap.
+  // Provider completion may only prepare data for that same navigation.
+  Future<String?> _resolveCastSheetSourceWithIntent(
+    Torrent source,
+    int? ticket,
+  ) async {
+    if (ticket == null) {
+      final permitted = _capturePlayerEffectGuard();
+      if (!_playbackOwnership.isLocal) return null;
+      final result = await _buildSourceSheetResolver()(source);
+      return permitted() && _playbackOwnership.isLocal ? result : null;
+    }
+    if (!_castIntentCurrent(ticket)) return null;
+    if (widget.resolveSourceToPlaylist != null) {
+      final playlist = await widget.resolveSourceToPlaylist!(source);
+      if (!_castIntentCurrent(ticket)) return null;
+      if (playlist == null || playlist.isEmpty) return null;
+      final firstUrl = playlist.first.url;
+      if (firstUrl.isEmpty) return null;
+      _castSourcePlaylistsByIntent[ticket] = playlist;
+      return firstUrl;
+    }
+    final resolvedUrl = await _effectiveResolver!(source);
+    if (!_castIntentCurrent(ticket)) return null;
+    return resolvedUrl;
+  }
+
+  Future<void> _handleSourceSelected(
+    int index,
+    String url, {
+    int? navigationGeneration,
+  }) async {
+    if ((navigationGeneration == null && !_playbackOwnership.isLocal) ||
+        (navigationGeneration != null && !_castIntentCurrent(navigationGeneration))) return;
     // Picking a source aborts the landing verifier — it must not re-issue the
     // old target against the replacement stream (that could even trip the
     // validator's position gate). The GUARD deliberately stays armed: the
     // switch paths below checkpoint the outgoing position, and that save must
     // still be protected (they substitute the held target where needed).
     _resumeVerifyEpoch++;
+
+    final pendingPlaylist = navigationGeneration != null
+        ? _castSourcePlaylistsByIntent.remove(navigationGeneration)
+        : _pendingSourcePlaylist;
+    _pendingSourcePlaylist = null;
+    if (!_playbackOwnership.isLocal && !_castRemoteActive) return;
+    if (_castRemoteActive) {
+      await _switchCastSource(
+        index,
+        url,
+        pendingPlaylist: pendingPlaylist,
+        navigationGeneration: navigationGeneration,
+      );
+      return;
+    }
+
     // Live IPTV channel: the movie pipeline below seeks to the previous
     // position and reloads subtitles — both meaningless (and harmful) for a
     // live stream. Route to the dedicated live switch instead.
@@ -9225,8 +10069,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       await _switchToIptvSource(index, url);
       return;
     }
-    final pendingPlaylist = _pendingSourcePlaylist;
-    _pendingSourcePlaylist = null;
     if (pendingPlaylist != null && pendingPlaylist.isNotEmpty) {
       await _switchToSourcePlaylist(
         index,
@@ -9238,12 +10080,142 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     }
   }
 
+  Future<void> _switchCastSource(
+    int index,
+    String resolvedUrl, {
+    List<PlaylistEntry>? pendingPlaylist,
+    int? navigationGeneration,
+  }) async {
+    if (!_castRemoteActive) return;
+    if (navigationGeneration != null &&
+        !_castIntentCurrent(navigationGeneration)) return;
+    final active = _activeCastRequest;
+    if (active == null) return;
+
+    final source =
+        (_effectiveSources != null &&
+            index >= 0 &&
+            index < _effectiveSources!.length)
+        ? _effectiveSources![index]
+        : null;
+
+    var candidateUrl = resolvedUrl;
+    Map<String, String>? candidateHeaders = source?.httpHeaders;
+    String? separateAudioUrl = widget.audioUrl;
+    var targetIndex = _currentIndex;
+
+    if (pendingPlaylist != null && pendingPlaylist.isNotEmpty) {
+      targetIndex = 0;
+      final current = _traktSeasonEpisode();
+      if (current.season != null && current.episode != null) {
+        for (var i = 0; i < pendingPlaylist.length; i++) {
+          final parsed = SeriesParser.parseFilename(pendingPlaylist[i].title);
+          if (parsed.season == current.season &&
+              parsed.episode == current.episode) {
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+      final entry = pendingPlaylist[targetIndex];
+      if (entry.url.trim().isNotEmpty) candidateUrl = entry.url;
+      candidateHeaders = entry.httpHeaders ?? candidateHeaders;
+      separateAudioUrl = entry.audioUrl;
+    }
+
+    final compatibility = CastSourceCompatibility.classify(
+      url: candidateUrl,
+      headers: candidateHeaders,
+      separateAudioUrl: separateAudioUrl,
+    );
+    if (!compatibility.canAttempt) {
+      final code = switch (compatibility.kind) {
+        CastSourceCompatibilityKind.unsupportedHeaders =>
+          'CAST_UNSUPPORTED_HEADERS',
+        CastSourceCompatibilityKind.unsupportedScheme => 'CAST_INVALID_URL',
+        CastSourceCompatibilityKind.unsupportedContainer ||
+        CastSourceCompatibilityKind.unsupportedAudioVideoLayout =>
+          'CAST_SOURCE_SWITCH_FAILED',
+        CastSourceCompatibilityKind.supported ||
+        CastSourceCompatibilityKind.unknown => 'CAST_SOURCE_SWITCH_FAILED',
+      };
+      _showCastFailure(
+        CastException(code, compatibility.reason ?? 'Cast source unsupported.'),
+      );
+      return;
+    }
+
+    final castTicket = navigationGeneration ?? _beginCastNavigation();
+    if (!_castIntentCurrent(castTicket)) return;
+    final presentationGeneration = ++_castPresentationGeneration;
+    _castSourceSwitchInProgress = true;
+    _hideSourceSheet();
+    final previousIndex = _currentSourceIndex;
+    final position = _authoritativePosition;
+    final wasPlaying = _authoritativePlaying;
+    try {
+      final candidate = active.copyWith(
+        url: candidateUrl,
+        mimeType: CastMediaRequest.inferMimeType(
+          candidateUrl,
+          fallbackName: pendingPlaylist != null && pendingPlaylist.isNotEmpty
+              ? pendingPlaylist[targetIndex].title
+              : source?.name,
+        ),
+        position: position,
+        duration: _authoritativeDuration,
+        headers: Map<String, String>.from(
+          candidateHeaders ?? const <String, String>{},
+        ),
+        textTracks: _buildCastTextTracks(),
+        autoplay: wasPlaying,
+      );
+
+      final previousTrackingState = _lastCastPlaybackState;
+      final committed = await _loadCastReplacement(
+        candidate,
+        failureCode: 'CAST_SOURCE_SWITCH_FAILED',
+        failureMessage:
+            'The replacement Cast source failed and the previous source was restored when possible.',
+        resetTrackingState: false,
+        navigationGeneration: castTicket,
+      );
+      if (!_castIntentCurrent(castTicket)) return;
+      if (!committed) {
+        _currentSourceIndex = previousIndex;
+        return;
+      }
+      _lastCastPlaybackState = previousTrackingState;
+
+      setState(() {
+        _currentSourceIndex = index;
+        _currentStreamUrl = candidateUrl;
+        _activeHttpHeaders = candidateHeaders;
+        if (pendingPlaylist != null && pendingPlaylist.isNotEmpty) {
+          _activePlaylist = pendingPlaylist;
+          _currentIndex = targetIndex;
+          _cachedSeriesPlaylist = null;
+          _playlistIdentityToken++;
+        }
+      });
+      unawaited(_commitValidatedStremioSource(source));
+    } finally {
+      if (presentationGeneration == _castPresentationGeneration) {
+        _castSourceSwitchInProgress = false;
+        if (_castRemoteActive) {
+          _syncCastTrackingState(_castService.snapshot);
+        }
+      }
+    }
+  }
+
   /// Manual pick from the source sheet while a Stremio IPTV channel plays:
   /// open the chosen link directly. No position seek, no subtitle
   /// bookkeeping, and no auto-advance on failure — the user chose this link
   /// deliberately, so a dead pick just leaves the channel down (they can
   /// pick another from the sheet).
   Future<void> _switchToIptvSource(int index, String url) async {
+    if (!_playbackOwnership.isLocal) return;
     _hideSourceSheet();
     final key = _iptvChannelKey;
     final ticket = ++_iptvSwitchTicket;
@@ -9868,6 +10840,128 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         .toList();
   }
 
+  Future<bool> _switchCastStremioTvChannel(
+    String channelId,
+    String url,
+    String title, {
+    String? contentImdbId,
+    String? contentType,
+    int? contentSeason,
+    int? contentEpisode,
+    Map<String, dynamic>? nowPlaying,
+    Map<String, dynamic>? nextUp,
+    double? startAtPercent,
+    List<Torrent>? newSources,
+    int? newSourceIndex,
+    Future<String?> Function(Torrent)? sourceResolver,
+    bool rollbackOnFailure = true,
+    int? navigationGeneration,
+  }) async {
+    if (!_castRemoteActive || !_castService.connected) return false;
+    final castTicket = navigationGeneration ?? _beginCastNavigation();
+    if (!_castIntentCurrent(castTicket)) return false;
+    final sourceIndex = newSourceIndex ?? 0;
+    final source = newSources != null &&
+            sourceIndex >= 0 &&
+            sourceIndex < newSources.length
+        ? newSources[sourceIndex]
+        : null;
+    final request = _buildCastResolvedMediaRequest(
+      url: url,
+      title: title,
+      contentType: contentType,
+      season: contentSeason,
+      episode: contentEpisode,
+      headers: source?.httpHeaders,
+      autoplay: _castService.state != CastPlaybackState.paused,
+    );
+    if (request == null) {
+      _showCastFailure(
+        const CastException(
+          'CAST_SOURCE_SWITCH_FAILED',
+          'This Stremio TV stream is not compatible with direct Cast playback.',
+        ),
+      );
+      return false;
+    }
+
+    final presentationGeneration = ++_castPresentationGeneration;
+    _castSourceSwitchInProgress = true;
+    final percentTicket = _castStartPercentGate.prepare(
+      contentId: request.url,
+      previousMediaSessionId: _castService.snapshot.mediaSessionId,
+      startAtPercent: startAtPercent,
+    );
+    try {
+      final committed = await _loadCastReplacement(
+        request,
+        failureCode: 'CAST_SOURCE_SWITCH_FAILED',
+        failureMessage: 'Stremio TV could not switch this Cast stream.',
+        showFailure: true,
+        rollbackOnFailure: rollbackOnFailure,
+        pendingStartGeneration: percentTicket,
+        navigationGeneration: castTicket,
+      );
+      if (!committed || !mounted || !_castLatestLoadCommitted) {
+        if (_castStartPercentGate.isCurrent(percentTicket)) {
+          _castStartPercentGate.cancel();
+        }
+        return false;
+      }
+      _castStartPercentGate.confirm(percentTicket);
+      _maybeApplyCastPendingStart(_castService.snapshot);
+      if (!_castLatestLoadCommitted) return false;
+
+      setState(() {
+        _currentStremioTvChannelId = channelId;
+        _activePlaylist = null;
+        _cachedSeriesPlaylist = null;
+        _syntheticGuidePlaylist = null;
+        _playlistIdentityToken++;
+        _singleFileImdbId = null;
+        _singleFileImdbFetched = false;
+        _dynamicTitle = title;
+        _currentStremioTvContentImdbId = contentImdbId;
+        _currentStremioTvContentType = contentType;
+        _currentStremioTvContentSeason = contentSeason;
+        _currentStremioTvContentEpisode = contentEpisode;
+        _currentStremioTvContentTitle = title;
+        _currentStreamUrl = url;
+        _activeHttpHeaders = source?.httpHeaders;
+        _applyStremioTvGuidePlaybackData(
+          channelId,
+          nowPlaying: nowPlaying,
+          nextUp: nextUp,
+        );
+        if (newSources != null) {
+          _stremioSourcesOverride = newSources;
+          _currentSourceIndex = sourceIndex;
+        }
+        if (sourceResolver != null) {
+          _resolveStremioSourceOverride = sourceResolver;
+        }
+      });
+
+      _castExtraSubtitle = null;
+      _resetSubtitleState();
+      _resetSkipSegmentState();
+      _resetLocalCompletionState();
+      final committedIdentity = _castEffectTicket();
+      await _switchMdblistTarget();
+      if (!_castIntentCurrent(castTicket) || !committedIdentity.isCurrent) return false;
+      _lastCastPlaybackState = CastPlaybackState.connected;
+      _syncCastTrackingState(_castService.snapshot, force: true);
+      return true;
+    } finally {
+      if (presentationGeneration == _castPresentationGeneration) {
+        _castSourceSwitchInProgress = false;
+        if (_castRemoteActive) {
+          _syncCastTrackingState(_castService.snapshot);
+        }
+      }
+    }
+  }
+
   Future<void> _switchToStremioTvChannel(
     String channelId,
     String url,
@@ -9884,6 +10978,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     Future<String?> Function(Torrent)? sourceResolver,
   }) async {
     _hideStremioTvGuide();
+    if (!_playbackOwnership.isLocal && !_castRemoteActive) return;
+    if (_castRemoteActive) {
+      await _switchCastStremioTvChannel(
+        channelId,
+        url,
+        title,
+        contentImdbId: contentImdbId,
+        contentType: contentType,
+        contentSeason: contentSeason,
+        contentEpisode: contentEpisode,
+        nowPlaying: nowPlaying,
+        nextUp: nextUp,
+        startAtPercent: startAtPercent,
+        newSources: newSources,
+        newSourceIndex: newSourceIndex,
+        sourceResolver: sourceResolver,
+      );
+      return;
+    }
     _clearBufferingIndicator();
     setState(() {
       _isTransitioning = true;
@@ -9961,32 +11074,40 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     });
   }
 
+  /// True means a new slot was committed, or LOCAL playback was resumed
+  /// after a failed request (request handled; no further local fallback).
+  /// Under CAST, true only means confirmed new remote content.
   Future<bool> _goToNextStremioTvSlot({
     bool resumeCurrentOnFailure = true,
+    int? navigationGeneration,
   }) async {
     final requestNext = widget.stremioTvNextProvider;
     final channelId = _currentStremioTvChannelId;
     if (requestNext == null || channelId == null || channelId.isEmpty) {
       return false;
     }
-    if (_showStremioTvNextLoading) {
-      return true;
-    }
+    if (_showStremioTvNextLoading && !_castRemoteActive) return false;
+    final generation = navigationGeneration ??
+        (_castRemoteActive ? _beginCastNavigation() : ++_castNavigationGeneration);
 
+    final castOrigin = _castRemoteActive ? _castEffectTicket() : null;
     Map<String, dynamic>? result;
     _setStremioTvNextLoading(true);
     try {
       result = await requestNext(channelId);
-    } catch (e) {
-      debugPrint('Player: Stremio TV next failed: $e');
+    } catch (_) {
+      debugPrint('Player: Stremio TV next provider failed.');
     }
 
-    if (!mounted) return true;
+    if (!mounted || generation != _castNavigationGeneration ||
+        (castOrigin != null && !castOrigin.isCurrent) ||
+        (_castRemoteActive && !_castService.isCurrentLoad(generation))) return false;
     _setStremioTvNextLoading(false);
 
     if (result == null) {
       setState(() => _isTransitioning = false);
-      if (!resumeCurrentOnFailure) return false;
+      if (!StremioTvNextRecovery.canResumeLocal(
+        _playbackOwnership.owner, resumeCurrentOnFailure)) return false;
       try {
         await _player.play();
       } catch (_) {}
@@ -9997,7 +11118,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final title = result['title'] as String? ?? _dynamicTitle;
     if (url == null || url.isEmpty) {
       setState(() => _isTransitioning = false);
-      if (!resumeCurrentOnFailure) return false;
+      if (!StremioTvNextRecovery.canResumeLocal(
+        _playbackOwnership.owner, resumeCurrentOnFailure)) return false;
       try {
         await _player.play();
       } catch (_) {}
@@ -10008,6 +11130,31 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final sourceResolver =
         result['sourceResolver'] as Future<String?> Function(Torrent)?;
 
+    if (_playbackOwnership.isCast && _castRemoteActive) {
+      return _switchCastStremioTvChannel(
+        result['channelId'] as String? ?? channelId,
+        url,
+        title,
+        contentImdbId: result['contentImdbId'] as String?,
+        contentType: result['contentType'] as String?,
+        contentSeason: (result['contentSeason'] as num?)?.toInt(),
+        contentEpisode: (result['contentEpisode'] as num?)?.toInt(),
+        nowPlaying: result['nowPlaying'] is Map
+            ? Map<String, dynamic>.from(result['nowPlaying'] as Map)
+            : null,
+        nextUp: result['nextUp'] is Map
+            ? Map<String, dynamic>.from(result['nextUp'] as Map)
+            : null,
+        startAtPercent: (result['startAtPercent'] as num?)?.toDouble(),
+        newSources: newSources,
+        newSourceIndex: (result['stremioCurrentSourceIndex'] as num?)?.toInt(),
+        sourceResolver: sourceResolver,
+        rollbackOnFailure: resumeCurrentOnFailure,
+        navigationGeneration: generation,
+      );
+    }
+
+    if (!_playbackOwnership.isLocal) return false;
     await _switchToStremioTvChannel(
       result['channelId'] as String? ?? channelId,
       url,
@@ -10030,6 +11177,132 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     return true;
   }
 
+  Future<bool> _switchCastDebrifyChannelPayload(
+    Map<String, dynamic> payload, {
+    int? navigationGeneration,
+  }) async {
+    if (!_castRemoteActive || !_castService.connected) return false;
+    final castTicket = navigationGeneration ?? _beginCastNavigation();
+    if (!_castIntentCurrent(castTicket)) return false;
+    final rawUrl = payload['firstUrl'] ?? payload['url'];
+    final rawTitle = payload['firstTitle'] ?? payload['title'];
+    final url = rawUrl is String ? rawUrl : '';
+    final title = rawTitle is String ? rawTitle : '';
+    if (url.isEmpty) {
+      _showCastFailure(
+        const CastException(
+          'CAST_SOURCE_SWITCH_FAILED',
+          'This Debrify TV channel has no playable Cast URL.',
+        ),
+      );
+      return false;
+    }
+
+    final parsed = SeriesParser.parseFilename(title);
+    Map<String, String>? payloadHeaders;
+    final rawHeaders = payload['httpHeaders'] ?? payload['headers'];
+    if (rawHeaders is Map) {
+      payloadHeaders = <String, String>{
+        for (final entry in rawHeaders.entries)
+          if (entry.key.toString().trim().isNotEmpty &&
+              entry.value.toString().trim().isNotEmpty)
+            entry.key.toString(): entry.value.toString(),
+      };
+    }
+    final request = _buildCastResolvedMediaRequest(
+      url: url,
+      title: title.isEmpty ? _currentPlaybackTitleForIdentity() : title,
+      contentType: _effectiveContentType,
+      season: parsed.season,
+      episode: parsed.episode,
+      headers: payloadHeaders,
+      autoplay: _castService.state != CastPlaybackState.paused,
+    );
+    if (request == null) {
+      _showCastFailure(
+        const CastException(
+          'CAST_SOURCE_SWITCH_FAILED',
+          'This Debrify TV channel is not compatible with direct Cast playback.',
+        ),
+      );
+      return false;
+    }
+
+    final presentationGeneration = ++_castPresentationGeneration;
+    _castSourceSwitchInProgress = true;
+    final desiredStart = widget.startFromRandom
+        ? _random.nextDouble() *
+            widget.randomStartMaxPercent.clamp(0, 100) / 100
+        : widget.startAtPercent;
+    final percentTicket = _castStartPercentGate.prepare(
+      contentId: request.url,
+      previousMediaSessionId: _castService.snapshot.mediaSessionId,
+      startAtPercent: desiredStart,
+    );
+    try {
+      final committed = await _loadCastReplacement(
+        request,
+        failureCode: 'CAST_SOURCE_SWITCH_FAILED',
+        failureMessage: 'Debrify TV could not switch this Cast channel.',
+        pendingStartGeneration: percentTicket,
+        navigationGeneration: castTicket,
+      );
+      if (!committed || !mounted || !_castLatestLoadCommitted) {
+        if (_castStartPercentGate.isCurrent(percentTicket)) {
+          _castStartPercentGate.cancel();
+        }
+        return false;
+      }
+      _castStartPercentGate.confirm(percentTicket);
+      _maybeApplyCastPendingStart(_castService.snapshot);
+      if (!_castLatestLoadCommitted) return false;
+
+      final channelName = payload['channelName']?.toString();
+      final channelId = payload['channelId']?.toString();
+      final numberRaw = payload['channelNumber'];
+      final channelNumber = numberRaw is num
+          ? numberRaw.toInt()
+          : int.tryParse(numberRaw?.toString() ?? '');
+
+      setState(() {
+        if (channelId != null && channelId.isNotEmpty) {
+          _currentChannelId = channelId;
+        }
+        if (channelName != null && channelName.trim().isNotEmpty) {
+          _currentChannelName = channelName;
+        }
+        if (channelNumber != null) _currentChannelNumber = channelNumber;
+        if (title.isNotEmpty) _dynamicTitle = title;
+        _activePlaylist = null;
+        _cachedSeriesPlaylist = null;
+        _syntheticGuidePlaylist = null;
+        _playlistIdentityToken++;
+        _singleFileImdbId = null;
+        _singleFileImdbFetched = false;
+        _currentStreamUrl = url;
+        _activeHttpHeaders = payloadHeaders;
+      });
+      _raiseDebrifyBanner();
+      _castExtraSubtitle = null;
+      _resetSubtitleState();
+      _resetSkipSegmentState();
+      _resetLocalCompletionState();
+      final committedIdentity = _castEffectTicket();
+      await _switchMdblistTarget();
+      if (!_castIntentCurrent(castTicket) || !committedIdentity.isCurrent) return false;
+      _lastCastPlaybackState = CastPlaybackState.connected;
+      _syncCastTrackingState(_castService.snapshot, force: true);
+      return true;
+    } finally {
+      if (presentationGeneration == _castPresentationGeneration) {
+        _castSourceSwitchInProgress = false;
+        if (_castRemoteActive) {
+          _syncCastTrackingState(_castService.snapshot);
+        }
+      }
+    }
+  }
+
   /// Switch to a specific channel by ID (from channel guide)
   Future<void> _goToChannelById(ChannelEntry channel) async {
     _hideChannelGuideOverlay();
@@ -10037,6 +11310,36 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final request = widget.requestChannelById;
     if (request == null) {
       debugPrint('Player: requestChannelById not provided');
+      return;
+    }
+
+    // Cast owns the stream: provider lookup must not pause media_kit.
+    if (!_playbackOwnership.isLocal) {
+      if (!_castRemoteActive || !_castService.connected) return;
+      final generation = _beginCastNavigation();
+      final origin = _castEffectTicket();
+      if (mounted) setState(() => _isTransitioning = true);
+      try {
+        final castPayload = await request(channel.id);
+        if (!mounted || generation != _castNavigationGeneration ||
+            !origin.isCurrent || !_castRemoteActive) return;
+        if (castPayload == null) {
+          _showCastFailure(const CastException(
+            'CAST_SOURCE_SWITCH_FAILED', 'Cast channel provider returned no channel.'));
+          return;
+        }
+        await _switchCastDebrifyChannelPayload(
+          castPayload, navigationGeneration: generation,
+        );
+      } catch (_) {
+        if (!origin.isCurrent) return;
+        _showCastFailure(const CastException(
+          'CAST_SOURCE_SWITCH_FAILED', 'Cast channel provider failed.'));
+      } finally {
+        if (mounted && generation == _castNavigationGeneration) {
+          setState(() => _isTransitioning = false);
+        }
+      }
       return;
     }
 
@@ -10072,6 +11375,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         _tvStaticSubtext = '';
         _isTransitioning = false;
       });
+      return;
+    }
+
+    if (_castRemoteActive) {
+      await _switchCastDebrifyChannelPayload(payload);
+      if (mounted) setState(() => _isTransitioning = false);
       return;
     }
 
@@ -10167,6 +11476,36 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       return;
     }
 
+    // Cast owns the stream: provider lookup must not pause media_kit.
+    if (!_playbackOwnership.isLocal) {
+      if (!_castRemoteActive || !_castService.connected) return;
+      final generation = _beginCastNavigation();
+      final origin = _castEffectTicket();
+      if (mounted) setState(() => _isTransitioning = true);
+      try {
+        final castPayload = await request();
+        if (!mounted || generation != _castNavigationGeneration ||
+            !origin.isCurrent || !_castRemoteActive) return;
+        if (castPayload == null) {
+          _showCastFailure(const CastException(
+            'CAST_SOURCE_SWITCH_FAILED', 'Cast channel provider returned no channel.'));
+          return;
+        }
+        await _switchCastDebrifyChannelPayload(
+          castPayload, navigationGeneration: generation,
+        );
+      } catch (_) {
+        if (!origin.isCurrent) return;
+        _showCastFailure(const CastException(
+          'CAST_SOURCE_SWITCH_FAILED', 'Cast channel provider failed.'));
+      } finally {
+        if (mounted && generation == _castNavigationGeneration) {
+          setState(() => _isTransitioning = false);
+        }
+      }
+      return;
+    }
+
     _clearBufferingIndicator();
     setState(() {
       _isTransitioning = true;
@@ -10196,6 +11535,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         _tvStaticSubtext = '';
         _isTransitioning = false;
       });
+      return;
+    }
+
+    if (_castRemoteActive) {
+      await _switchCastDebrifyChannelPayload(payload);
+      if (mounted) setState(() => _isTransitioning = false);
       return;
     }
 
@@ -10305,6 +11650,48 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   /// Navigate to previous episode
   Future<void> _goToPreviousEpisode() async {
+    if (_castRemoteActive) {
+      // Previous claims its intent before guide/provider work, just like Next.
+      final generation = _beginCastNavigation();
+      final origin = _castEffectTicket();
+      _castAdvanceInProgress = true;
+      try {
+        final previousIndex = _findPreviousEpisodeIndex();
+        if (previousIndex >= 0 && _activePlaylist != null) {
+          var url = _activePlaylist![previousIndex].url;
+          if (url.isEmpty) {
+            url = await _resolvePlaylistEntryUrl(previousIndex);
+          }
+          if (!_castIntentCurrent(generation) || !origin.isCurrent) return;
+          if (url.isNotEmpty) await _commitCastPlaylistEpisode(
+            previousIndex, url, autoAdvance: false);
+          return;
+        }
+        if (!_canFetchEpisodes) return;
+        final current = _traktSeasonEpisode();
+        if (current.season == null || current.episode == null) return;
+        var previous = _adjacentEpisode(current.season!, current.episode!, -1);
+        if (previous == null) {
+          final resolved = await origin.resolve(_resolveAdjacentWithCachedGuide(
+            current.season!, current.episode!, -1));
+          if (resolved != null) previous = (resolved.season, resolved.episode);
+        }
+        if (!_castIntentCurrent(generation) || !origin.isCurrent || previous == null) return;
+        await _resolveAndCastAdjacentEpisode(
+          autoAdvance: false, requestedTarget: previous);
+      } on CastException catch (error) {
+        if (origin.isCurrent) _showCastFailure(error);
+      } finally {
+        if (generation == _castNavigationGeneration) {
+          _castAdvanceInProgress = false;
+          if (mounted) setState(() => _isTransitioning = false);
+          if (_castRemoteActive) _syncCastTrackingState(_castService.snapshot);
+        }
+      }
+      return;
+    }
+    if (!_playbackOwnership.isLocal) return;
+
     // Show black screen during transition to hide previous frame
     _clearBufferingIndicator();
     setState(() {
@@ -10346,84 +11733,59 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   /// Mark the current episode as finished if it's a series
-  Future<void> _markCurrentEpisodeAsFinished() async {
-    final seriesPlaylist = _seriesPlaylist;
-    // Single-file series playback: use widget params
-    if ((seriesPlaylist == null || !seriesPlaylist.isSeries) &&
-        widget.contentType == 'series' &&
-        widget.contentSeason != null &&
-        widget.contentEpisode != null &&
-        widget.contentImdbId != null) {
-      _currentEpisodeMarkedAsFinished = true;
-      try {
-        await StorageService.markEpisodeAsFinished(
-          seriesTitle: widget.contentTitle ?? widget.title,
-          season: widget.contentSeason!,
-          episode: widget.contentEpisode!,
-          imdbId: widget.contentImdbId,
-        );
-      } catch (_) {}
-      return;
-    }
-    if (seriesPlaylist == null ||
-        !seriesPlaylist.isSeries ||
-        seriesPlaylist.seriesTitle == null) {
-      return;
-    }
+  Future<void> _markCurrentEpisodeAsFinished({
+    CastPlayerCompletionTarget? target,
+    bool Function()? permitted,
+  }) async {
+    final completion = target ?? _captureCompletionTarget();
+    final current = permitted ?? _capturePlayerEffectGuard();
+    if (!current() || completion.contentType != 'series' ||
+        completion.season == null || completion.episode == null ||
+        _currentEpisodeMarkedAsFinished || !_completionGate.claim(completion.key)) return;
     _currentEpisodeMarkedAsFinished = true;
     try {
-      // Find the current episode info
-      if (_currentIndex >= 0 && _currentIndex < _activePlaylist!.length) {
-        final currentEpisode = seriesPlaylist.allEpisodes.firstWhere(
-          (episode) => episode.originalIndex == _currentIndex,
-          orElse: () => seriesPlaylist.allEpisodes.first,
-        );
-
-        if (currentEpisode.seriesInfo.season != null &&
-            currentEpisode.seriesInfo.episode != null) {
-          await StorageService.markEpisodeAsFinished(
-            seriesTitle: seriesPlaylist.seriesTitle!,
-            season: currentEpisode.seriesInfo.season!,
-            episode: currentEpisode.seriesInfo.episode!,
-            imdbId: seriesPlaylist.imdbId ?? widget.contentImdbId,
-          );
-        }
-      }
-    } catch (e) {}
+      await StorageService.markEpisodeAsFinished(
+        seriesTitle: completion.title, season: completion.season!,
+        episode: completion.episode!, imdbId: completion.imdbId,
+        permitted: current,
+      );
+    } catch (_) {}
   }
 
-  Future<void> _markCurrentMovieAsFinished() async {
-    final imdbId = _currentLocalMovieImdbId;
-    if (!_usesLocalCompletionTracking ||
-        _currentMovieMarkedAsFinished ||
-        imdbId == null) {
-      return;
-    }
-    // Set this before the await: position events are frequent and completion
-    // must perform one cleanup/write, not queue one per frame.
+  Future<void> _markCurrentMovieAsFinished({
+    CastPlayerCompletionTarget? target,
+    bool Function()? permitted,
+  }) async {
+    final completion = target ?? _captureCompletionTarget();
+    final current = permitted ?? _capturePlayerEffectGuard();
+    if (!current() || !_usesLocalCompletionTracking ||
+        completion.contentType != 'movie' || completion.imdbId == null ||
+        _currentMovieMarkedAsFinished || !_completionGate.claim(completion.key)) return;
+    final resumeKey = _resumeKey;
     _currentMovieMarkedAsFinished = true;
     try {
-      await Future.wait([
-        StorageService.markMovieAsFinished(imdbId),
-        StorageService.removeVideoResume(_resumeKey, playbackCheckpoint: true),
-      ]);
-    } catch (_) {
-      // Playback remains usable if local storage is temporarily unavailable.
-    }
+      await StorageService.markMovieAsFinished(completion.imdbId!, permitted: current);
+      if (!current()) return;
+      await StorageService.removeVideoResume(resumeKey, playbackCheckpoint: true, permitted: current);
+    } catch (_) {}
   }
 
   /// Apply the local, user-configured completion rule. This is synchronous on
   /// purpose because it runs for every position update; actual writes stay
   /// unawaited and are guarded one-shot above/in [_markCurrentEpisodeAsFinished].
   void _checkAndApplyLocalCompletion() {
-    if (_validationGateActive ||
+    final position = _authoritativePosition;
+    final duration = _authoritativeDuration;
+    if ((_castRemoteActive && (_castService.hasLoadInFlight ||
+        !_acceptedCastSnapshotCurrent(_castService.snapshot))) ||
+        _validationGateActive ||
         !_usesLocalCompletionTracking ||
-        _duration <= Duration.zero ||
-        _position <= Duration.zero) {
+        duration <= Duration.zero ||
+        position <= Duration.zero) {
       return;
     }
 
-    final percent = _position.inMicroseconds * 100 / _duration.inMicroseconds;
+    final percent = position.inMicroseconds * 100 / duration.inMicroseconds;
     final movieImdbId = _currentLocalMovieImdbId;
     if (movieImdbId != null) {
       if (!_currentMovieRewatchStarted && percent < _movieCompletionThreshold) {
@@ -10487,6 +11849,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     Torrent? manualValidationSource,
     int? manualValidationSourceIndex,
   }) async {
+    if (_castRemoteActive) {
+      final generation = _beginCastNavigation();
+      final origin = _castEffectTicket();
+      _castAdvanceInProgress = true;
+      try {
+        final playlist = _activePlaylist;
+        if (playlist == null || index < 0 || index >= playlist.length) return false;
+        var url = playlist[index].url;
+        if (url.isEmpty) url = await _resolvePlaylistEntryUrl(index);
+        if (!_castIntentCurrent(generation) || !origin.isCurrent || url.isEmpty) return false;
+        return await _commitCastPlaylistEpisode(index, url, autoAdvance: false);
+      } finally {
+        if (generation == _castNavigationGeneration) {
+          _castAdvanceInProgress = false;
+          if (_castRemoteActive) _syncCastTrackingState(_castService.snapshot);
+        }
+      }
+    }
+    if (!_playbackOwnership.isLocal) return false;
     if (request == null) {
       return _loadPlaylistIndexAttempt(
         index,
@@ -11387,8 +12768,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     return false;
   }
 
+  bool _metadataPersistenceAllowed(SeriesPlaylist playlist) =>
+      _metadataPersistencePlaylist != null &&
+      identical(_activePlaylist, _metadataPersistencePlaylist) &&
+      identical(playlist, _seriesPlaylist) &&
+      _effectiveContentImdbId == widget.contentImdbId;
+
   /// Preload episode information in the background
   Future<void> _preloadEpisodeInfo() async {
+    final permitted = _capturePlayerEffectGuard();
     final seriesPlaylist = _seriesPlaylist;
 
     if (seriesPlaylist != null && seriesPlaylist.isSeries) {
@@ -11397,11 +12785,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       // Pass IMDB ID from catalog for faster, more accurate lookup
       await seriesPlaylist
           .fetchEpisodeInfo(
-            playlistItem: _constructPlaylistItemData(),
-            imdbId: widget.contentImdbId,
+            playlistItem: _metadataPersistenceAllowed(seriesPlaylist)
+                ? _constructPlaylistItemData() : null,
+            imdbId: _effectiveContentImdbId,
           )
           .then((_) async {
-            if (!mounted ||
+            if (!permitted() ||
                 playlistIdentityToken != _playlistIdentityToken ||
                 !identical(seriesPlaylist, _seriesPlaylist)) {
               return;
@@ -11419,10 +12808,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
             setState(() {});
 
             // Save discovered IMDB ID back to playlist item for future direct plays
-            await _saveImdbIdToPlaylist(seriesPlaylist);
+            bool persistenceCurrent() => permitted() && _metadataPersistenceAllowed(seriesPlaylist);
+            await _saveImdbIdToPlaylist(seriesPlaylist, permitted: persistenceCurrent);
+            if (!permitted()) return;
 
             // Extract poster URL from series data and save to playlist
-            await _saveSeriesPosterToPlaylist(seriesPlaylist);
+            await _saveSeriesPosterToPlaylist(seriesPlaylist, permitted: persistenceCurrent);
           })
           .catchError((error) {
             // Silently handle errors - this is just preloading
@@ -11434,14 +12825,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
           .fetchMovieMetadataForIndex(_currentIndex)
           .then((imdbId) {
             // Trigger UI update if IMDB ID was discovered
-            if (mounted && imdbId != null) {
+            if (permitted() && imdbId != null) {
               setState(() {});
             }
           })
           .catchError((error) {
             // Silently handle errors - this is just preloading
           });
-    } else if (seriesPlaylist == null && widget.contentImdbId == null) {
+    } else if (seriesPlaylist == null && _effectiveContentImdbId == null) {
       // Single-file playback (no playlist) - try to fetch movie metadata from title
       await _fetchSingleFileMovieMetadata();
     }
@@ -11474,10 +12865,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   /// Fetch movie metadata for single-file playback (when no playlist exists)
   Future<void> _fetchSingleFileMovieMetadata() async {
     // Skip if already fetched or we have an IMDB ID
-    if (_singleFileImdbFetched || widget.contentImdbId != null) {
+    if (_singleFileImdbFetched || _effectiveContentImdbId != null) {
       return;
     }
 
+    final permitted = _capturePlayerEffectGuard();
     _singleFileImdbFetched = true;
 
     // Use dynamic title (updated on stream switch) or fall back to widget title
@@ -11512,6 +12904,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         movieInfo.year,
       );
 
+      if (!permitted()) return;
       if (metadata != null) {
         _singleFileImdbId = metadata.imdbId;
         debugPrint(
@@ -11528,7 +12921,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     }
   }
 
-  Future<void> _saveImdbIdToPlaylist(SeriesPlaylist seriesPlaylist) async {
+  Future<void> _saveImdbIdToPlaylist(SeriesPlaylist seriesPlaylist, {
+    required bool Function() permitted,
+  }) async {
+    if (!permitted() || !_metadataPersistenceAllowed(seriesPlaylist)) return;
     final imdbId = seriesPlaylist.imdbId;
     if (imdbId == null || !imdbId.startsWith('tt')) return;
     if (widget.contentImdbId != null) return;
@@ -11538,13 +12934,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       rdTorrentId: widget.rdTorrentId,
       torboxTorrentId: widget.torboxTorrentId,
       pikpakCollectionId: widget.pikpakCollectionId,
+      permitted: permitted,
     );
   }
 
   /// Save series poster URL to playlist item
   Future<void> _saveSeriesPosterToPlaylist(
-    SeriesPlaylist seriesPlaylist,
-  ) async {
+    SeriesPlaylist seriesPlaylist, {
+    required bool Function() permitted,
+  }) async {
+    if (!permitted() || !_metadataPersistenceAllowed(seriesPlaylist)) return;
     print('🎬 _saveSeriesPosterToPlaylist called');
     print('  seriesTitle: ${seriesPlaylist.seriesTitle}');
 
@@ -11578,22 +12977,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     print('  Poster URL: $posterUrl');
     try {
-      if (rdTorrentId != null && rdTorrentId.isNotEmpty) {
+      if (permitted() && rdTorrentId != null && rdTorrentId.isNotEmpty) {
         await StorageService.updatePlaylistItemPoster(
           posterUrl,
           rdTorrentId: rdTorrentId,
+          permitted: permitted,
         );
       }
-      if (torboxTorrentId != null && torboxTorrentId.isNotEmpty) {
+      if (permitted() && torboxTorrentId != null && torboxTorrentId.isNotEmpty) {
         await StorageService.updatePlaylistItemPoster(
           posterUrl,
           torboxTorrentId: torboxTorrentId,
+          permitted: permitted,
         );
       }
-      if (pikpakCollectionId != null && pikpakCollectionId.isNotEmpty) {
+      if (permitted() && pikpakCollectionId != null && pikpakCollectionId.isNotEmpty) {
         await StorageService.updatePlaylistItemPoster(
           posterUrl,
           pikpakCollectionId: pikpakCollectionId,
+          permitted: permitted,
         );
       }
     } catch (e) {
@@ -11737,7 +13139,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   /// Handle taps on the PiP window's action buttons.
   void _onPipAction(String action) {
-    if (!mounted || !_playerCreated) return;
+    if (!mounted || !_playerCreated || !_playerProfileCurrent ||
+        !_playbackOwnership.isLocal) return;
     if (action.startsWith('seek:')) {
       final seconds = double.tryParse(action.substring(5));
       if (seconds == null || !seconds.isFinite || _isTransitioning) return;
@@ -11795,8 +13198,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         _iptvStartOverActive &&
         _activeMediaShouldPlay &&
         !_activeMediaUserPaused;
+    final restoringLocal = _playbackOwnership.owner == PlaybackOwner.transferringToLocal;
     if (!_playerCreated ||
-        (!_isPlaying && !_isTransitioning && !openingStartOver)) {
+        (!_isPlaying && !_isTransitioning && !openingStartOver && !restoringLocal)) {
       return;
     }
     // A recovery in flight must not re-open streams behind a backgrounded
@@ -11821,11 +13225,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     // before open/play. Calling play on the disposing instance would race the
     // one-player ownership guarantee.
     if (_rendererFallbackInProgress) return;
-    if (!_playerCreated || !mounted) return;
+    if (!_playerCreated || !mounted || !_playerProfileCurrent) return;
     // Coming back from the background is not a request to un-stop the night:
     // if the sleep timer fired while we were away, stay paused until someone
     // presses play.
-    if (_sleepStopLatched) return;
+    if (!CastPlayerRestorePlan.mayResumeLocal(
+      localOwnsPlayback: _playbackOwnership.isLocal,
+      sleepStopped: _sleepStopLatched)) return;
     // LIVE, back after a real absence: the paused stream is minutes behind
     // the edge (or dead). Re-tune to the live edge — same "comes back
     // playing" contract, at the right point in the broadcast. Short trips
@@ -11856,14 +13262,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   @override
   void dispose() {
+    ProfileRuntime.scope.removeListener(_onPlayerProfileChanged);
+    final hadRemoteCast =
+        _castRemoteActive && _castService.connected && !_castExplicitRouteExit;
     _castService.removeListener(_onCastServiceChanged);
-    if (_castRemoteActive) {
-      unawaited(
-        _castService.disconnect().then<void>((_) {}).catchError((Object _) {}),
-      );
-    }
+    _castService.cancelNavigationLoads();
+    // Technical Flutter/Activity recreation must not tear down a healthy
+    // receiver session. PopScope marks real route exits and disconnects there.
     _pendingCastRequest = null;
     _castRemoteActive = false;
+    _castStartPercentGate.cancel();
     _stremioTvStartupWatch?.dispose();
     _stremioTvStartupSeek.cancel();
     _observeServerWatch();
@@ -11945,13 +13353,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     // Detach from PiP (disarms auto-enter); ignored if a newer player already
     // took ownership, so route replacement can't disarm the incoming screen.
     PipService.detach(this);
-    // Scrobble stop to Trakt when user exits player
+    // A technical Flutter/Activity recreation must not manufacture a remote
+    // stop while Cast keeps playing. Explicit route exits still close tracking.
+    final preserveRemoteTracking = hadRemoteCast;
     _stopTraktHeartbeat();
     _analyticsHeartbeatTimer?.cancel();
-    _traktScrobble('stop');
     _stopSimklHeartbeat();
-    _simklScrobble('stop');
-    _mdblistStop();
+    if (!preserveRemoteTracking) {
+      _traktScrobble('stop');
+      _simklScrobble('stop');
+      _mdblistStop();
+    }
+    // MDBList owns its own periodic timer. Always close the old screen's
+    // session so Activity recreation cannot leave a second checkpoint loop.
     unawaited(_mdblistSession?.close() ?? Future.value());
 
     // Save the current state before disposing
@@ -12624,7 +14038,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   bool _resumeSaveBlocked(bool debounced) {
-    if (_validationGateActive || !_isReady) return true;
+    if (_castRemoteActive && (_castService.hasLoadInFlight ||
+        !_acceptedCastSnapshotCurrent(_castService.snapshot))) return true;
+    if (_playbackOwnership.owner == PlaybackOwner.transferringToLocal) return true;
+    if (!_playerProfileCurrent || _validationGateActive || !_isReady) return true;
     // An IPTV zap flips _currentIptvIndex — and therefore _resumeKey — before
     // the incoming stream opens, while _position/_duration still describe the
     // OUTGOING one (_isReady is never cleared for the gap). A tick landing in
@@ -12690,8 +14107,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }) async {
     if (_resumeSaveBlocked(debounced)) return;
 
-    var pos = positionOverride ?? _position;
-    final dur = _duration;
+    var pos = positionOverride ?? _authoritativePosition;
+    final dur = _authoritativeDuration;
     if (dur <= Duration.zero) {
       return;
     }
@@ -13072,7 +14489,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
           !_controlsVisible.value &&
           !_anyPlayerOverlayOpen,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop || !mounted) return;
+        if (didPop) {
+          _handlePlayerRoutePopped();
+          return;
+        }
+        if (!mounted) return;
         if (_tvScrubTarget != null) {
           _tvScrubCancel();
           return;
@@ -13533,6 +14954,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   /// for the previous channel is dropped rather than painted under the new
   /// channel's name.
   Future<void> _loadIptvZapBannerEpg(IptvChannel channel, int ticket) async {
+    final permitted = _capturePlayerEffectGuard();
     EpgNowNext? result;
     try {
       result = await IptvEpgService.instance.nowNextWithCatchupMetadata(
@@ -13541,7 +14963,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     } catch (_) {
       result = null;
     }
-    if (!mounted || ticket != _iptvZapEpgTicket) return;
+    if (!permitted() || ticket != _iptvZapEpgTicket ||
+        _iptvZapChannel?.url != channel.url) return;
     _iptvArchiveRetryAt = DateTime.now().add(const Duration(seconds: 60));
     setState(() {
       _iptvZapEpg = result;
@@ -13573,7 +14996,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final clamped = target < minPos
         ? minPos
         : (target > maxPos ? maxPos : target);
-    await _player.seek(clamped);
+    _seekUserPlayback(clamped);
     _traktScrobbleSeek(clamped);
     _simklScrobbleSeek(clamped);
     _mdblistScrobbleSeek(clamped);
@@ -13704,16 +15127,335 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     return initial.isEmpty ? null : initial;
   }
 
+  List<CastTextTrackRequest> _buildCastTextTracks({
+    StremioSubtitle? extraSubtitle,
+    bool commitTrackIds = true,
+  }) {
+    final candidates = <StremioSubtitle>[
+      ...?_cachedStremioSubtitles,
+      if (_injectedSubtitleSlots != null)
+        ...AddonSubtitleSlot.flatten(_injectedSubtitleSlots!),
+      if (extraSubtitle != null)
+        extraSubtitle
+      else if (_castExtraSubtitle != null)
+        _castExtraSubtitle!,
+    ];
+    final seenUrls = <String>{};
+    final tracks = <CastTextTrackRequest>[];
+    final nextIds = <String, StremioSubtitle>{};
+    var nextId = 1000;
+    for (final sub in candidates) {
+      if (!seenUrls.add(sub.url)) continue;
+      final support = CastSubtitleSupport.classify(sub.url);
+      if (!support.supported) continue;
+      final id = nextId++;
+      final language =
+          LanguageMapper.canonicalLanguage(sub.lang) ??
+          sub.lang.trim().replaceAll('_', '-');
+      final safeLanguage = language.isEmpty ? 'und' : language;
+      tracks.add(
+        CastTextTrackRequest(
+          id: id,
+          url: sub.url,
+          language: safeLanguage,
+          label: sub.displayName,
+          mimeType: support.mimeType ?? 'text/vtt',
+        ),
+      );
+      nextIds[id.toString()] = sub;
+    }
+    if (commitTrackIds) {
+      _castStremioSubtitleTrackIds
+        ..clear()
+        ..addAll(nextIds);
+    }
+    return tracks;
+  }
+
+  Future<void> _pauseAcceptedCastForSleep(int generation, CastPlayerMediaIdentity identity) async {
+    bool current() => _playerProfileCurrent && _castIntentCurrent(generation) &&
+        _playbackOwnership.isCast && !_castService.receiverOperationBlocked &&
+        !_castService.receiverRecoveryRequired && !_castService.hasLoadInFlight &&
+        identity.sameMediaAs(_castMediaIdentity());
+    if (!_sleepStopLatched || !current()) return;
+    try {
+      final paused = await _castService.pause();
+      if (!current()) return;
+      if (paused.state == CastPlaybackState.playing || paused.state == CastPlaybackState.buffering) {
+        throw const CastException('CAST_SLEEP_PAUSE_FAILED', 'Sleep timer could not pause Cast.');
+      }
+    } catch (_) {
+      if (_playerProfileCurrent && _castIntentCurrent(generation)) {
+        _suspendCastTracking();
+        _showCastFailure(const CastException('CAST_SLEEP_PAUSE_FAILED',
+          'Sleep timer could not pause Cast. Use Cast controls to pause or disconnect.'));
+      }
+    }
+  }
+
+  Future<bool> _loadCastReplacement(
+    CastMediaRequest candidate, {
+    required String failureCode,
+    required String failureMessage,
+    bool showFailure = true,
+    bool resetTrackingState = true,
+    bool rollbackOnFailure = true,
+    int? pendingStartGeneration,
+    int? navigationGeneration,
+  }) async {
+    if (!_castRemoteActive || !_castService.connected) return false;
+    final castTicket = navigationGeneration ?? _beginCastNavigation();
+    if (!_castIntentCurrent(castTicket)) return false;
+    if (pendingStartGeneration == null) _castStartPercentGate.cancel();
+    bool permitted() => _castIntentCurrent(castTicket) && _playbackOwnership.isCast;
+    final previous = _activeCastRequest;
+    final outgoingTracking = _captureCastTrackingTarget();
+    final outgoingDuration = _authoritativeDuration;
+    final transaction = previous == null ? null :
+        CastSwitchTransaction<CastMediaRequest>(
+          previous: previous,
+          position: _authoritativePosition,
+          wasPlaying: _authoritativePlaying,
+        );
+    final result = await _castService.coordinatedLoad(
+      candidate, generation: castTicket, permitted: permitted,
+    );
+    if (!permitted() || !_castService.isCurrentLoad(result.generation)) {
+      return false; // An obsolete ACK may still have reached the receiver.
+    }
+    if (result.committed) {
+      transaction?.commit(candidate);
+      if (resetTrackingState) _stopCastTrackingForNavigation(outgoingTracking);
+      _activeCastRequest = candidate;
+      _activeCastMediaIdentity = _castMediaIdentity(result.value!);
+      _lastCastCommittedLoadGeneration = result.generation;
+      _castEndedGate.sync(result.value!.endedSequence);
+      if (resetTrackingState) {
+        _lastCastPlaybackState = CastPlaybackState.connected;
+      }
+      await _pauseAcceptedCastForSleep(castTicket, _activeCastMediaIdentity!);
+      if (!permitted()) return false;
+      unawaited(_applyCastLanguagePolicy());
+      return true;
+    }
+    if (pendingStartGeneration != null &&
+        _castStartPercentGate.isCurrent(pendingStartGeneration)) {
+      _castStartPercentGate.cancel();
+    }
+    if (rollbackOnFailure && previous != null && permitted() &&
+        !_castService.receiverLoadBlocked &&
+        (result.outcome == CastLoadOutcome.failed ||
+         result.outcome == CastLoadOutcome.rejected)) {
+      final rollback = transaction!.rollback().copyWith(
+        position: transaction.position,
+        duration: outgoingDuration,
+        autoplay: transaction.wasPlaying,
+      );
+      final restored = await _castService.coordinatedLoad(
+        rollback, generation: castTicket, permitted: permitted,
+      );
+      if (restored.committed && permitted() &&
+          _castService.isCurrentLoad(restored.generation)) {
+        _activeCastRequest = rollback;
+        _activeCastMediaIdentity = _castMediaIdentity(restored.value!);
+        _lastCastCommittedLoadGeneration = restored.generation;
+        _castEndedGate.sync(restored.value!.endedSequence);
+        await _pauseAcceptedCastForSleep(castTicket, _activeCastMediaIdentity!);
+        if (!permitted()) return false;
+        if (resetTrackingState) {
+          _lastCastPlaybackState = CastPlaybackState.connected;
+        }
+        unawaited(_applyCastLanguagePolicy());
+      }
+    }
+    if (showFailure && permitted() && !_castService.hasLoadInFlight) {
+      _showCastFailure(CastException(failureCode, failureMessage));
+    }
+    return false;
+  }
+
+  Future<void> _applyCastLanguagePolicy() async {
+    if (!mounted || !_playerProfileCurrent || !_castRemoteActive || !_playbackOwnership.isCast ||
+        _castService.hasLoadInFlight || !_acceptedCastSnapshotCurrent(_castService.snapshot)) return;
+    if (_castLanguagePolicyApplying) {
+      _castLanguagePolicyReapply = true;
+      return;
+    }
+    _castLanguagePolicyApplying = true;
+    final seriesIdentity = _castSeriesLanguageIdentity();
+    final profile = ProfileRuntime.scope.value;
+    _bindCastLanguageSeries(seriesIdentity);
+    final revision = _castLanguagePolicyRevision;
+    final generation = _castNavigationGeneration;
+    final snapshot = _castService.snapshot;
+    bool current() => mounted && _playerProfileCurrent && _castRemoteActive &&
+        _playbackOwnership.isCast && !_castService.receiverOperationBlocked &&
+        !_castService.receiverRecoveryRequired && _castService.connected &&
+        _castNavigationGeneration == generation &&
+        _castLanguagePolicyRevision == revision &&
+        ProfileRuntime.scope.value == profile &&
+        _castSeriesLanguageIdentity() == seriesIdentity &&
+        _castService.snapshot.bridgeInstanceId == snapshot.bridgeInstanceId &&
+        _castService.snapshot.sessionEpoch == snapshot.sessionEpoch &&
+        _castService.snapshot.mediaContentId == snapshot.mediaContentId &&
+        _castService.snapshot.mediaSessionId == snapshot.mediaSessionId;
+    try {
+      final stored = seriesIdentity == null ? null :
+          await StorageService.getSeriesCastLanguagePreferences(seriesIdentity, permitted: current);
+      if (!current()) return;
+      if (stored != null) {
+        if (!_castManualAudioChosen && stored.audioLanguage != null) {
+          _castService.rememberAudioLanguage(stored.audioLanguage);
+        }
+        if (!_castManualSubtitleChosen) {
+          if (stored.subtitlesDisabled) _castService.rememberSubtitlesDisabled();
+          else if (stored.subtitleLanguage != null) {
+            _castService.rememberSubtitleLanguage(stored.subtitleLanguage);
+          }
+        }
+      }
+      final preferredAudio = await StorageService.getDefaultAudioLanguage();
+      if (!current()) return;
+      final desiredAudio = CastLanguagePolicy.chooseAudio(
+        tracks: snapshot.availableAudioTracks,
+        manualLanguage: _castService.sessionAudioLanguage,
+        preferredLanguage: preferredAudio ?? 'en',
+      );
+      if (desiredAudio?.selected == true && current()) {
+        _castService.rememberAudioLanguage(desiredAudio!.language);
+      }
+      final preferredSubtitle =
+          await StorageService.getDefaultSubtitleLanguage();
+      if (!current()) return;
+      final explicitOff = _castService.sessionSubtitlesDisabled ||
+          (_castService.sessionSubtitleLanguage == null && preferredSubtitle == 'off');
+      final desiredSubtitle = CastLanguagePolicy.chooseSubtitle(
+        tracks: snapshot.availableSubtitleTracks,
+        explicitlyDisabled: explicitOff,
+        manualLanguage: _castService.sessionSubtitleLanguage,
+        preferredLanguage: preferredSubtitle ?? 'es',
+      );
+      if (!current()) return;
+      if (explicitOff) {
+        if (snapshot.selectedSubtitleTrack != null) {
+          await _castService.disableSubtitles();
+        }
+      } else if (desiredSubtitle != null &&
+          desiredSubtitle.id != snapshot.selectedSubtitleTrack) {
+        await _castService.selectSubtitleTrack(desiredSubtitle.id);
+      }
+    } on CastException catch (error) {
+      if (current() && error.code != 'CAST_TRACK_NOT_FOUND' &&
+          error.code != 'CAST_COMMAND_SUPERSEDED') _showCastFailure(error);
+    } finally {
+      _castLanguagePolicyApplying = false;
+      if (_castLanguagePolicyReapply && mounted && _castRemoteActive) {
+        _castLanguagePolicyReapply = false;
+        unawaited(_applyCastLanguagePolicy());
+      }
+    }
+  }
+
+  void _syncCastTrackingState(
+    CastSnapshot snapshot, {
+    bool force = false,
+  }) {
+    if (!_playbackOwnership.acceptsCastTelemetry || _castService.hasLoadInFlight ||
+        !_acceptedCastSnapshotCurrent(snapshot)) return;
+    if (_castTrackingSuspended) {
+      force = true;
+      _castTrackingSuspended = false;
+    }
+    final next = snapshot.state;
+    if (next == CastPlaybackState.ended &&
+        snapshot.endedSequence > _castEndedGate.lastAccepted) {
+      unawaited(_handleCastEnded(snapshot));
+      return;
+    }
+    if (next == CastPlaybackState.ended && _lastCastPlaybackState == next) return;
+    if (!force &&
+        (_castSourceSwitchInProgress || _castAdvanceInProgress)) {
+      return;
+    }
+    if (!force && next == _lastCastPlaybackState) return;
+    final previous = _lastCastPlaybackState;
+    _lastCastPlaybackState = next;
+    if (next != CastPlaybackState.ended) unawaited(_applyCastLanguagePolicy());
+
+    if (_validationGateActive) return;
+    switch (next) {
+      case CastPlaybackState.playing:
+        if (_authoritativeDuration > Duration.zero) {
+          _traktScrobble('start');
+          if (_traktLastScrobbleAction == 'start') {
+            _startTraktHeartbeat();
+          }
+          if (_simklScrobbleEnabled) {
+            _simklLastScrobbleAction = 'start';
+            _startSimklHeartbeat();
+          }
+          _mdblistPlay();
+        }
+        break;
+      case CastPlaybackState.paused:
+        if (previous == CastPlaybackState.playing) {
+          _traktScrobble('pause');
+          _stopTraktHeartbeat();
+          _simklScrobble('pause');
+          _stopSimklHeartbeat();
+          _mdblistPause();
+        }
+        break;
+      case CastPlaybackState.ended:
+        _stopTraktHeartbeat();
+        _traktScrobble('stop');
+        _stopSimklHeartbeat();
+        _simklScrobble('stop');
+        _mdblistStop(complete: true);
+        break;
+      case CastPlaybackState.disconnected:
+      case CastPlaybackState.connecting:
+      case CastPlaybackState.connected:
+      case CastPlaybackState.error:
+        break;
+    }
+  }
+
+  Future<void> _handleCastEnded(CastSnapshot snapshot) async {
+    final ticket = _castEffectTicket(snapshot);
+    if (!ticket.isCurrent || snapshot.state != CastPlaybackState.ended ||
+        snapshot.mediaContentId == null || snapshot.mediaSessionId == null ||
+        snapshot.mediaContentId != _activeCastRequest?.url ||
+        _castAdvanceInProgress || !_castEndedGate.accept(snapshot.endedSequence)) return;
+    final completion = _captureCompletionTarget();
+    final completionPermitted = _capturePlayerEffectGuard();
+    _syncCastTrackingState(snapshot);
+    await _markCurrentEpisodeAsFinished(target: completion, permitted: completionPermitted);
+    if (!ticket.isCurrent) return;
+    await _markCurrentMovieAsFinished(target: completion, permitted: completionPermitted);
+    if (!ticket.isCurrent) return;
+    if (_sleepTimerMode == SleepTimerMode.endOfItem) {
+      _cancelSleepTimer();
+      _sleepStopLatched = true;
+      _activeMediaShouldPlay = false;
+      _showSleepTimerToast('Sleep timer — stopping here');
+      return;
+    }
+    final advanced = await _goToNextEpisodeOnCast(autoAdvance: true);
+    if (!advanced && ticket.isCurrent && mounted) setState(() {});
+  }
+
   bool get _canCastCurrentMedia {
     if (!Platform.isAndroid || PlatformUtil.isTelevision) return false;
     if (!_castService.available && !_castService.connected) return false;
-    if (widget.audioUrl?.trim().isNotEmpty == true) return false;
     final url = _castCurrentUrl;
-    if (url == null || !CastMediaRequest.isDirectHttpMediaUrl(url)) {
-      return false;
-    }
-    final headers = _activeHttpHeaders;
-    return headers == null || headers.isEmpty;
+    if (url == null) return false;
+    final compatibility = CastSourceCompatibility.classify(
+      url: url,
+      headers: _activeHttpHeaders,
+      separateAudioUrl: widget.audioUrl,
+    );
+    return compatibility.canAttempt;
   }
 
   CastMediaRequest? _buildCastMediaRequest() {
@@ -13759,12 +15501,219 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       headers: Map<String, String>.from(
         _activeHttpHeaders ?? const <String, String>{},
       ),
-      autoplay: _isPlaying,
+      textTracks: _buildCastTextTracks(),
+      autoplay: _authoritativePlaying,
       isLive: _currentIptvChannel?.isLive == true,
     );
   }
 
+  bool _castYieldReceiverCurrent(int generation, CastPlayerMediaIdentity identity) =>
+      mounted && !_screenDisposed && _playerProfileCurrent && !_castExplicitRouteExit &&
+      generation == _castNavigationGeneration && _castService.isCurrentLoad(generation) &&
+      _playbackOwnership.owner == PlaybackOwner.transferringToCast &&
+      !_castService.receiverOperationBlocked && !_castService.receiverRecoveryRequired &&
+      !_castService.hasLoadInFlight && _castService.connected &&
+      identity.sameMediaAs(_castMediaIdentity());
+
+  void _settleInitialCastTransfer(int generation) {
+    if (_playbackOwnership.owner != PlaybackOwner.transferringToCast ||
+        !CastPlayerRestorePlan.mayCancelInitialTransfer(
+          ownsAttempt: generation == _castNavigationGeneration,
+          remoteCommitted: _castRemoteActive ||
+              (_activeCastMediaIdentity != null && _castService.snapshot.sessionEpoch != null),
+          receiverUncertain: _castService.receiverOperationBlocked ||
+              _castService.receiverRecoveryRequired || _castService.hasLoadInFlight)) return;
+    _playbackOwnership.cancelCastTransfer();
+    _pendingCastRequest = null;
+    _activeCastRequest = null;
+    _activeCastMediaIdentity = null;
+    final resumeParkedLocal = _castLocalPausedForYield && _castHandoffWasPlaying &&
+        !_pausedByLifecycle && !_sleepStopLatched;
+    _castLocalPausedForYield = false;
+    if (resumeParkedLocal) {
+      unawaited(Future<void>(() async {
+        if (!mounted || !_playerProfileCurrent || !_playbackOwnership.isLocal ||
+            _sleepStopLatched || _pausedByLifecycle ||
+            generation != _castNavigationGeneration || _castExplicitRouteExit ||
+            _castService.receiverOperationBlocked || _castService.receiverRecoveryRequired ||
+            _castService.snapshot.sessionEpoch != null) return;
+        try { await _player.play(); } catch (_) {}
+      }));
+    }
+    _resumeTrackingAfterValidationGate();
+  }
+
+  Future<bool> _yieldLocalAndPublishCast(int generation, CastSnapshot loaded, {
+    required Object? expectedProfile,
+  }) async {
+    final identity = _castMediaIdentity(loaded);
+    final profile = expectedProfile;
+    if (_castLocalYieldInFlight || ProfileRuntime.scope.value != profile ||
+        !_castYieldReceiverCurrent(generation, identity)) return false;
+    _castLocalYieldInFlight = true;
+    try {
+      final yielded = await CastPlayerRestorePlan.yieldToCast(
+        permitted: () => _playerProfileCurrent && ProfileRuntime.scope.value == profile &&
+            _castYieldReceiverCurrent(generation, identity),
+        pauseLocal: () async {
+          await _player.pause();
+          if (generation == _castNavigationGeneration &&
+              _playbackOwnership.owner == PlaybackOwner.transferringToCast) {
+            _castLocalPausedForYield = true;
+          }
+        },
+        settleReceiver: () async {
+          // A sleep stop can arrive while LOAD/alignment/local pause awaits.
+          // Pause the actual accepted receiver before publishing this handoff.
+          if (!_sleepStopLatched) return;
+          final paused = await _castService.pause();
+          if (paused.state == CastPlaybackState.playing ||
+              paused.state == CastPlaybackState.buffering) {
+            throw StateError('Receiver sleep pause has not settled');
+          }
+        },
+        publish: () {
+          if (_player.state.playing) throw StateError('Local pause has not settled');
+          final current = _castService.snapshot;
+          _castRemoteActive = true;
+          _pendingCastRequest = null;
+          _castEndedGate.sync(loaded.endedSequence);
+          _lastCastPlaybackState = CastPlaybackState.connected;
+          _position = current.position ?? loaded.position ?? _position;
+          _duration = current.duration ?? loaded.duration ?? _duration;
+          _playbackUiClock.updatePosition(_position, immediate: true);
+          _playbackUiClock.updateDuration(_duration);
+          _playbackOwnership.commitCast();
+          _castLocalPausedForYield = false;
+          _syncCastTrackingState(current, force: true);
+          _syncWakelock(false);
+          unawaited(_saveResume(positionOverride: _position));
+          unawaited(_applyCastLanguagePolicy());
+          if (mounted) setState(() {});
+        },
+      );
+      if (!yielded) return false;
+      return true;
+    } catch (_) {
+      if (generation == _castNavigationGeneration && ProfileRuntime.scope.value == profile &&
+          _playbackOwnership.owner == PlaybackOwner.transferringToCast && mounted) {
+        _pendingCastRequest = null;
+        _suspendCastTracking();
+        _showCastFailure(_sleepStopLatched && _castLocalPausedForYield
+          ? const CastException('CAST_SLEEP_PAUSE_FAILED',
+              'Sleep timer could not pause Cast. Use Cast controls to pause or disconnect.')
+          : const CastException('CAST_LOCAL_YIELD_FAILED',
+              'Playback could not pause on this device. Tap Cast to retry the handoff.'));
+      }
+      return false;
+    } finally {
+      _castLocalYieldInFlight = false;
+      _settleInitialCastTransfer(generation);
+    }
+  }
+
+  Future<void> _retryCastLocalYield() async {
+    if (_castLocalYieldInFlight || _castLoadInFlight ||
+        _castService.receiverOperationBlocked || _castService.receiverRecoveryRequired) return;
+    final request = _activeCastRequest;
+    final identity = _activeCastMediaIdentity;
+    if (request == null || identity == null) return;
+    final originalGeneration = _castNavigationGeneration;
+    final profile = ProfileRuntime.scope.value;
+    try {
+      final fresh = await CastPlayerGuardedEffect.resolve(_castService.refresh(),
+        () => mounted && ProfileRuntime.scope.value == profile &&
+          originalGeneration == _castNavigationGeneration &&
+          _playbackOwnership.owner == PlaybackOwner.transferringToCast);
+      if (fresh == null) return;
+      if (!mounted || originalGeneration != _castNavigationGeneration ||
+          _playbackOwnership.owner != PlaybackOwner.transferringToCast ||
+          !fresh.connected || !identity.sameMediaAs(_castMediaIdentity(fresh))) return;
+      final generation = _beginCastNavigation();
+      if (!_castService.adoptVerifiedReceiverIdentity(fresh: fresh,
+        expectedContentId: request.url, generation: generation)) return;
+      _activeCastMediaIdentity = _castMediaIdentity(fresh);
+      _lastCastCommittedLoadGeneration = generation;
+      await _yieldLocalAndPublishCast(generation, fresh, expectedProfile: profile);
+    } on CastException catch (error) {
+      if (originalGeneration == _castNavigationGeneration) _showCastFailure(error);
+    }
+  }
+
+  Future<void> _maybeAdoptRestoredCastSession() async {
+    if (!mounted || !_playerProfileCurrent || !_playerCreated || !_playbackOwnership.isLocal || _castRemoteActive ||
+        _castRestoreAdoptionInProgress || _pendingCastRequest != null) return;
+    final initial = _castService.snapshot;
+    if (!initial.connected ||
+        initial.sessionEpoch == null ||
+        initial.mediaContentId == null ||
+        initial.mediaSessionId == null ||
+        initial.mediaSessionId! <= 0 ||
+        (initial.state != CastPlaybackState.playing &&
+         initial.state != CastPlaybackState.paused)) return;
+
+    // Never map arbitrary Chromecast media to this screen's local request.
+    final request = _buildCastMediaRequest();
+    if (request == null || request.url != initial.mediaContentId) return;
+    final playerCurrent = _capturePlayerEffectGuard();
+    final profile = ProfileRuntime.scope.value;
+    bool current() => playerCurrent() && _playbackOwnership.isLocal;
+    _castRestoreAdoptionInProgress = true;
+    try {
+      final fresh = await CastPlayerGuardedEffect.resolve(_castService.refresh(), current);
+      if (fresh == null || !current() || _buildCastMediaRequest()?.url != request.url) return;
+      if (!mounted || _castRemoteActive || _pendingCastRequest != null ||
+          !fresh.connected ||
+          fresh.bridgeInstanceId != initial.bridgeInstanceId ||
+          fresh.sessionEpoch != initial.sessionEpoch ||
+          fresh.mediaContentId != request.url ||
+          fresh.mediaSessionId != initial.mediaSessionId ||
+          (fresh.state != CastPlaybackState.playing &&
+           fresh.state != CastPlaybackState.paused)) return;
+      final ticket = _beginCastNavigation();
+      if (!_castService.adoptVerifiedReceiverIdentity(
+        fresh: fresh, expectedContentId: request.url,
+        generation: ticket,
+      )) return;
+      _bindCastLanguageSeries(_castSeriesLanguageIdentity());
+      _castService.restoreSessionTrackIntent(fresh);
+      _playbackOwnership.beginCastTransfer();
+      _activeCastRequest = request.copyWith(
+        position: fresh.position ?? _position,
+        duration: fresh.duration ?? _duration,
+        autoplay: fresh.state == CastPlaybackState.playing,
+      );
+      _activeCastMediaIdentity = _castMediaIdentity(fresh);
+      _lastCastCommittedLoadGeneration = ticket;
+      _castHandoffWasPlaying = request.autoplay;
+      await _yieldLocalAndPublishCast(ticket, fresh, expectedProfile: profile);
+    } finally {
+      _castRestoreAdoptionInProgress = false;
+    }
+  }
+
   Future<void> _onCastPressed() async {
+    if (_castRestoreInFlight) return;
+    if (_playbackOwnership.owner == PlaybackOwner.transferringToCast) {
+      if (_castService.receiverOperationBlocked || _castService.receiverRecoveryRequired) {
+        try { await _castService.connect(); } on CastException catch (error) {
+          _showCastFailure(error);
+        }
+        return;
+      }
+      await _retryCastLocalYield();
+      return;
+    }
+    if (_playbackOwnership.owner == PlaybackOwner.transferringToLocal) {
+      if (_castService.connected || _castService.snapshot.sessionEpoch != null ||
+          _castService.receiverOperationBlocked || _castService.receiverRecoveryRequired) {
+        try { await _castService.connect(); } on CastException catch (error) { _showCastFailure(error); }
+        return;
+      }
+      final failed = _lastCastDisconnectSnapshot;
+      if (failed != null) await _restoreLocalAfterCast(failed);
+      return;
+    }
     if (_castRemoteActive) {
       try {
         await _castService.connect();
@@ -13795,6 +15744,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       return;
     }
 
+    _beginCastNavigation();
     _pendingCastRequest = request;
     if (_castService.connected) {
       await _loadPendingCastRequest();
@@ -13811,7 +15761,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   Future<void> _loadPendingCastRequest() async {
-    if (!mounted || _castLoadInFlight || !_castService.connected) return;
+    if (!mounted || !_playerProfileCurrent || _castLoadInFlight || !_castService.connected) return;
 
     // Rebuild at session-start time so source, position and play/pause intent
     // reflect what is actually on screen after the device picker closes.
@@ -13831,42 +15781,167 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       return;
     }
 
+    final castTicket = _castNavigationGeneration == 0
+        ? _beginCastNavigation() : _castNavigationGeneration;
+    final profile = ProfileRuntime.scope.value;
     _castLoadInFlight = true;
     _castHandoffWasPlaying = request.autoplay;
+    _playbackOwnership.beginCastTransfer();
     if (mounted) setState(() {});
 
     try {
-      await _castService.load(request);
-      if (!mounted) return;
-
-      // The receiver accepted the load. Only now yield local playback, so a
-      // failed Cast attempt can never strand the viewer on a paused phone.
-      _castRemoteActive = true;
+      final accepted = await _castService.coordinatedLoad(
+        request,
+        generation: castTicket,
+        permitted: () => mounted && ProfileRuntime.scope.value == profile && _castLoadInFlight &&
+            _playbackOwnership.owner == PlaybackOwner.transferringToCast &&
+            !_castExplicitRouteExit,
+      );
+      if (!mounted || !_castService.isCurrentLoad(accepted.generation)) return;
+      if (!accepted.committed) {
+        throw const CastException('CAST_LOAD_FAILED', 'Cast load not confirmed.');
+      }
+      var loaded = accepted.value!;
+      _activeCastRequest = request;
+      _activeCastMediaIdentity = _castMediaIdentity(loaded);
+      _lastCastCommittedLoadGeneration = accepted.generation;
       _pendingCastRequest = null;
-      await _player.pause();
-      _syncWakelock(false);
-      unawaited(_saveResume(positionOverride: _position));
-      if (mounted) setState(() {});
+      if (ProfileRuntime.scope.value != profile) return;
+
+      // Local playback deliberately kept running until load success. Align the
+      // receiver to the local clock immediately before yielding ownership so
+      // the load round-trip does not make the handoff jump backwards.
+      var committedPosition = request.position ?? _position;
+      if (request.autoplay) {
+        final liveLocalPosition = _player.state.position;
+        final drift =
+            (liveLocalPosition - committedPosition).inMilliseconds.abs();
+        if (drift >= 750) {
+          try {
+            final aligned = await _castService.seekForCommittedMedia(
+              liveLocalPosition,
+              generation: castTicket,
+              contentId: loaded.mediaContentId,
+              mediaSessionId: loaded.mediaSessionId,
+              permitted: () => mounted && ProfileRuntime.scope.value == profile && !_castExplicitRouteExit &&
+                  _playbackOwnership.owner == PlaybackOwner.transferringToCast,
+            );
+            if (aligned != null) {
+              loaded = aligned;
+              committedPosition = liveLocalPosition;
+            }
+          } catch (_) {
+            // The media load itself succeeded; a best-effort alignment seek
+            // must not strand the viewer or undo a valid Cast handoff.
+          }
+        }
+      }
+
+      // Alignment timeout or physical/session replacement invalidates the
+      // handoff even when the original LOAD once committed.
+      if (ProfileRuntime.scope.value != profile ||
+          !_castYieldReceiverCurrent(castTicket, _castMediaIdentity(loaded))) return;
+      _activeCastRequest = request.copyWith(position: committedPosition);
+      _activeCastMediaIdentity = _castMediaIdentity(loaded);
+      await _yieldLocalAndPublishCast(castTicket, loaded, expectedProfile: profile);
     } on CastException catch (error) {
+      _settleInitialCastTransfer(castTicket);
       _pendingCastRequest = null;
       _showCastFailure(error);
     } finally {
+      _settleInitialCastTransfer(castTicket);
       _castLoadInFlight = false;
       if (mounted) setState(() {});
     }
   }
 
+  void _maybeApplyCastPendingStart(CastSnapshot snapshot) {
+    if (!_castRemoteActive || !_playbackOwnership.isCast) return;
+    final target = _castStartPercentGate.claim(
+      contentId: snapshot.mediaContentId,
+      mediaSessionId: snapshot.mediaSessionId,
+      duration: snapshot.duration,
+    );
+    if (target == null) return;
+    final epoch = _castSeekEpoch;
+    final ticket = _castNavigationGeneration;
+    final contentId = snapshot.mediaContentId;
+    final mediaSessionId = snapshot.mediaSessionId;
+    // A scheduled automatic seek must not outrank a later manual seek.
+    unawaited(Future<void>(() async {
+      if (epoch != _castSeekEpoch || ticket != _castNavigationGeneration ||
+          !_castRemoteActive || !_playbackOwnership.isCast ||
+          !_castService.connected ||
+          _castService.snapshot.mediaContentId != contentId ||
+          _castService.snapshot.mediaSessionId != mediaSessionId) return;
+      try {
+        await _castService.seekForCommittedMedia(
+          target,
+          generation: ticket,
+          contentId: contentId,
+          mediaSessionId: mediaSessionId,
+          permitted: () => epoch == _castSeekEpoch &&
+              ticket == _castNavigationGeneration &&
+              _castRemoteActive && _playbackOwnership.isCast,
+        );
+      } on CastException catch (error) {
+        if (epoch == _castSeekEpoch) _showCastFailure(error);
+      }
+    }));
+  }
+
   void _onCastServiceChanged() {
     if (!mounted) return;
+    if (!_playerProfileCurrent) { _onPlayerProfileChanged(); return; }
     final snapshot = _castService.snapshot;
+    if (_castService.receiverOperationBlocked ||
+        _castService.receiverRecoveryRequired) {
+      _suspendCastTracking();
+      if (!_castReceiverRecoveryVisible) {
+        _castReceiverRecoveryVisible = true;
+        _showCastFailure(const CastException(
+          'CAST_RECEIVER_OUT_OF_SYNC',
+          'Receiver media changed after a cancelled request. Retry the current source or reconnect.',
+        ));
+      }
+      setState(() {});
+      return; // Fail closed: no old UI time, EPG or tracking updates.
+    }
+    _castReceiverRecoveryVisible = false;
+    if (!snapshot.connected) {
+      _castStartPercentGate.cancel();
+      _castService.cancelNavigationLoads();
+      if (snapshot.sessionEpoch == null && !_castLoadInFlight &&
+          !_castRemoteActive &&
+          _playbackOwnership.owner == PlaybackOwner.transferringToCast) {
+        _settleInitialCastTransfer(_castNavigationGeneration);
+      }
+    }
 
     if (_pendingCastRequest != null &&
         snapshot.connected &&
         !_castRemoteActive &&
         !_castLoadInFlight) {
       unawaited(_loadPendingCastRequest());
+    } else if (!_castRemoteActive &&
+        _pendingCastRequest == null &&
+        snapshot.connected &&
+        (snapshot.state == CastPlaybackState.playing ||
+            snapshot.state == CastPlaybackState.paused)) {
+      unawaited(_maybeAdoptRestoredCastSession());
     }
 
+    if (_castRemoteActive && snapshot.connected &&
+        (_castService.hasLoadInFlight || !_acceptedCastSnapshotCurrent(snapshot))) {
+      _suspendCastTracking();
+      setState(() {});
+      return; // Uncommitted native snapshots have no UI/tracking authority.
+    }
+    if (_castRemoteActive && !snapshot.connected) {
+      if (!_castRestoreInFlight) unawaited(_restoreLocalAfterCast(snapshot));
+      setState(() {});
+      return;
+    }
     if (_castRemoteActive) {
       final position = snapshot.position;
       final duration = snapshot.duration;
@@ -13877,11 +15952,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       if (duration != null && duration > Duration.zero) {
         _duration = duration;
         _playbackUiClock.updateDuration(duration);
+        _maybeApplyCastPendingStart(snapshot);
       }
 
-      if ((snapshot.state == CastPlaybackState.disconnected ||
-              snapshot.state == CastPlaybackState.error) &&
-          !_castRestoreInFlight) {
+      final isNewEnded =
+          snapshot.state == CastPlaybackState.ended &&
+          snapshot.endedSequence > _castEndedGate.lastAccepted;
+      if (isNewEnded) {
+        // Ended owns its tracking transition. Do not also pass the same
+        // snapshot through the generic state reducer or Trakt/Simkl would
+        // receive duplicate stop/completion events.
+        unawaited(_handleCastEnded(snapshot));
+      } else if (snapshot.state != CastPlaybackState.ended) {
+        _syncCastTrackingState(snapshot);
+      }
+      _checkAndApplyLocalCompletion();
+      unawaited(_applyCastLanguagePolicy());
+
+      // Error with an active Cast route does NOT transfer playback ownership.
+      if (!snapshot.connected && !_castRestoreInFlight) {
         unawaited(_restoreLocalAfterCast(snapshot));
       }
     }
@@ -13890,74 +15979,141 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   Future<void> _restoreLocalAfterCast(CastSnapshot snapshot) async {
-    if (!mounted || _castRestoreInFlight) return;
+    if (!mounted || !_playerProfileCurrent || _castRestoreInFlight || _castService.receiverOperationBlocked ||
+        _castService.receiverRecoveryRequired || (!snapshot.connected && snapshot.sessionEpoch != null)) return;
+    _castStartPercentGate.cancel();
     _castRestoreInFlight = true;
-    final target =
-        snapshot.resumePosition ?? snapshot.position ?? _position;
-    final shouldPlay =
-        snapshot.resumeShouldPlay ?? _castHandoffWasPlaying;
-
+    _castService.cancelNavigationLoads();
+    final generation = ++_castNavigationGeneration;
+    _lastCastDisconnectSnapshot = snapshot;
+    final request = _activeCastRequest;
+    final profile = ProfileRuntime.scope.value;
+    final target = snapshot.resumePosition ?? snapshot.position ?? _position;
+    final shouldPlay = !_sleepStopLatched && !_castExplicitRouteExit &&
+        (snapshot.resumeShouldPlay ?? _castHandoffWasPlaying);
+    _playbackOwnership.beginLocalTransfer();
     _castRemoteActive = false;
     _pendingCastRequest = null;
+    bool current() => mounted && !_screenDisposed && _playerProfileCurrent && !_castExplicitRouteExit &&
+        ProfileRuntime.scope.value == profile &&
+        !_castService.receiverOperationBlocked && !_castService.receiverRecoveryRequired &&
+        !_castService.hasLoadInFlight && !_castService.snapshot.connected &&
+        _castService.snapshot.sessionEpoch == null &&
+        generation == _castNavigationGeneration &&
+        _playbackOwnership.owner == PlaybackOwner.transferringToLocal;
     if (mounted) setState(() {});
-
     try {
-      if (!_playerCreated || !mounted) return;
-      if (target >= Duration.zero) {
-        await _player.seek(target);
-        _position = target;
-        _playbackUiClock.updatePosition(target, immediate: true);
-      }
-      _activeMediaUserPaused = !shouldPlay;
-      _activeMediaShouldPlay = shouldPlay;
-      if (shouldPlay) {
-        await _player.play();
-      } else {
-        await _player.pause();
-      }
+      if (!_playerCreated || !current()) return;
+      final restored = await CastPlayerRestorePlan.restore(
+        parkedUrl: _activeOpenedMedia?.uri,
+        committedUrl: request?.url ?? _castCurrentUrl ?? widget.videoUrl,
+        headersChanged: request != null &&
+            !mapEquals(_activeOpenedMedia?.httpHeaders, request.headers),
+        position: target,
+        shouldPlay: shouldPlay,
+        shouldPlayNow: () => shouldPlay && !_sleepStopLatched && !_pausedByLifecycle,
+        permitted: current,
+        open: () => _openMedia(mk.Media(request?.url ?? _castCurrentUrl ?? widget.videoUrl,
+          httpHeaders: request?.headers ?? _activeHttpHeaders), play: false, beforeOpen: current),
+        seek: (position) => _player.seek(position),
+        setPlaying: (play) {
+          _activeMediaUserPaused = !play;
+          _activeMediaShouldPlay = play;
+          return play ? _player.play() : _player.pause();
+        },
+      );
+      if (!restored || !current()) return;
+      _position = target;
+      _playbackUiClock.updatePosition(target, immediate: true);
+      _playbackOwnership.commitLocal();
+      _activeCastRequest = null;
+      _activeCastMediaIdentity = null;
+      _lastCastDisconnectSnapshot = null;
+      _castHandoffWasPlaying = false;
+      _resumeTrackingAfterValidationGate();
       unawaited(_saveResume(positionOverride: target));
     } catch (error) {
-      debugPrint(
-        'Cast: local restore failed after remote session ended '
-        '(${error.runtimeType})',
-      );
+      debugPrint('Cast: local restore failed (${error.runtimeType})');
+      if (current()) _showCastFailure(const CastException(
+        'CAST_LOCAL_RESTORE_FAILED',
+        'Playback could not return to this device. Tap Cast to retry.'));
     } finally {
-      _castHandoffWasPlaying = false;
-      _castRestoreInFlight = false;
-      if (mounted) setState(() {});
+      if (generation == _castNavigationGeneration) {
+        // Keep transfer ownership on failure; parked media has no authority.
+        _castRestoreInFlight = false;
+        if (mounted) setState(() {});
+      }
     }
   }
 
   void _showCastFailure(CastException error) {
     if (!mounted) return;
     final message = switch (error.code) {
+      'CAST_LOCAL_RESTORE_FAILED' || 'CAST_LOCAL_YIELD_FAILED' || 'CAST_SLEEP_PAUSE_FAILED' => error.message,
       'CAST_UNSUPPORTED_HEADERS' =>
         'This source needs HTTP headers that Google Cast cannot safely use.',
       'CAST_INVALID_URL' =>
         'This source does not expose a direct HTTP/HTTPS Cast URL.',
       'CAST_LOAD_FAILED' =>
-        'The Cast device could not start this stream. Local playback is unchanged.',
-      _ => 'Google Cast could not start. Local playback is unchanged.',
+        'The Cast device could not start this stream. Current playback is unchanged.',
+      'CAST_TRACK_NOT_FOUND' =>
+        'That Cast track is no longer available.',
+      'CAST_TRACK_SELECTION_FAILED' =>
+        'The Cast device could not switch that track.',
+      'CAST_AUDIO_TRACK_UNSUPPORTED_RECEIVER' =>
+        'Audio-track switching needs a Custom Cast Receiver.',
+      'CAST_SUBTITLE_UNSUPPORTED_FORMAT' =>
+        'That subtitle format cannot be sent directly to Cast.',
+      'CAST_SUBTITLE_UNREACHABLE' =>
+        'That subtitle is not reachable by the Cast device.',
+      'CAST_SUBTITLE_REQUIRES_CONVERSION' =>
+        'That subtitle needs conversion and a receiver-reachable URL.',
+      'CAST_SOURCE_SWITCH_FAILED' =>
+        'The new source failed. Debrify kept or restored the previous Cast source.',
+      'CAST_NEXT_EPISODE_FAILED' =>
+        'The next episode could not be loaded on Cast.',
+      _ => 'Google Cast could not complete that action.',
     };
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _seekUserPlayback(Duration target) {
+    if (!_playerProfileCurrent) return;
     if (_castRemoteActive) {
+      if (!_playbackOwnership.isCast ||
+          !_acceptedCastSnapshotCurrent(_castService.snapshot)) return;
+      _castStartPercentGate.cancel();
+      ++_castSeekEpoch;
+      final ticket = _castNavigationGeneration;
+      final contentId = _castService.snapshot.mediaContentId;
+      final mediaSessionId = _castService.snapshot.mediaSessionId;
       unawaited(
-        _castService.seek(target).then<void>((_) {}).catchError((Object error) {
-          if (error is CastException) _showCastFailure(error);
+        _castService.seekForCommittedMedia(
+          target,
+          generation: ticket,
+          contentId: contentId,
+          mediaSessionId: mediaSessionId,
+          permitted: () => mounted && _castRemoteActive &&
+              _playbackOwnership.isCast &&
+              ticket == _castNavigationGeneration,
+        ).then<void>((_) {}).catchError((Object error) {
+          if (error is CastException &&
+              ticket == _castNavigationGeneration) _showCastFailure(error);
         }),
       );
       _position = target;
       _playbackUiClock.updatePosition(target, immediate: true);
       return;
     }
+    if (!_playbackOwnership.isLocal) return;
     _player.seek(target);
   }
 
   void _togglePlay() {
+    if (!_playerProfileCurrent) return;
     if (_castRemoteActive) {
+      if (!_playbackOwnership.isCast ||
+          !_acceptedCastSnapshotCurrent(_castService.snapshot)) return;
       final remotePlaying =
           _castService.state == CastPlaybackState.playing;
       if (remotePlaying) {
@@ -13976,6 +16132,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       _scheduleAutoHide();
       return;
     }
+    if (!_playbackOwnership.isLocal) return;
     if (!_isReady) return;
     if (_isPlaying) {
       _activeMediaUserPaused = true;
@@ -14181,9 +16338,27 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _cancelSleepTimer();
     _sleepStopLatched = true;
     _activeMediaShouldPlay = false;
-    if (!_playerCreated) return;
+    if (!_playerCreated || !_playerProfileCurrent) return;
+    if (_playbackOwnership.owner == PlaybackOwner.transferringToCast ||
+        _playbackOwnership.owner == PlaybackOwner.transferringToLocal) {
+      // The pending receiver transaction remains real. Stop the local renderer
+      // immediately; the yield path pauses accepted receiver media after drain.
+      try { await _player.pause(); } catch (error) {
+        debugPrint('Player: sleep transfer pause failed (${error.runtimeType})');
+      }
+      return;
+    }
+    final ticket = _castRemoteActive ? _castEffectTicket() : null;
+    final permitted = _capturePlayerEffectGuard();
     await _saveResume();
-    await _player.pause();
+    if (ticket != null) {
+      if (!ticket.isCurrent) return;
+      try { await _castService.pause(); } on CastException catch (error) {
+        if (ticket.isCurrent) _showCastFailure(error);
+      }
+    } else if (permitted() && _playbackOwnership.isLocal) {
+      await _player.pause();
+    } else { return; }
     _showSleepTimerToast('Sleep timer ended — paused');
   }
 
@@ -14586,6 +16761,21 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     bool autoAdvance = false,
     EpisodePlaybackRequest? request,
   }) async {
+    if (_castRemoteActive) {
+      final generation = _beginCastNavigation();
+      _castAdvanceInProgress = true;
+      try {
+        final committed = await _resolveAndCastAdjacentEpisode(
+          autoAdvance: autoAdvance, requestedTarget: (season, episode));
+        return committed ? EpisodePlaybackOutcome.committed : EpisodePlaybackOutcome.unavailable;
+      } finally {
+        if (generation == _castNavigationGeneration) {
+          _castAdvanceInProgress = false;
+          if (_castRemoteActive) _syncCastTrackingState(_castService.snapshot);
+        }
+      }
+    }
+    if (!_playbackOwnership.isLocal) return EpisodePlaybackOutcome.cancelled;
     if (!_canFetchEpisodes || _episodeFetchInProgress) {
       // A next/prev press may have raised the transition curtain already;
       // never leave it up when the request can't run.
@@ -15001,6 +17191,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     );
   }
 
+  void _handlePlayerRoutePopped() {
+    if (_castExplicitRouteExit) return;
+    _castExplicitRouteExit = true;
+    _castService.cancelNavigationLoads();
+    if (_castRemoteActive || _castService.connected) {
+      unawaited(
+        _castService.disconnect().then<void>((_) {
+          _castService.clearSessionTrackIntent();
+        }).catchError((Object _) {}),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isReady = _isReady;
@@ -15008,9 +17211,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     // video texture (and the buffering spinner) shows. Restores on exit.
     final inPip = _isPipActive;
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
+    return PopScope(
+      canPop: PlatformUtil.isTelevision || !_anyPlayerOverlayOpen,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) {
+          _handlePlayerRoutePopped();
+          return;
+        }
+        if (!PlatformUtil.isTelevision && mounted && _anyPlayerOverlayOpen) {
+          _closeTopPlayerOverlay();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
         left: false,
         top: false,
         right: false,
@@ -15915,6 +18129,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                                   castError:
                                       _castService.state ==
                                       CastPlaybackState.error,
+                                  castDeviceName: _castService.deviceName,
                                   onCast:
                                       _castRemoteActive ||
                                           _castUiConnecting ||
@@ -16139,17 +18354,31 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                             ? widget.seriesSourceFetcher
                             : null;
                         final se = _traktSeasonEpisode();
+                        final sourceAuthority = _sourceFetchAuthority();
                         return SourceSheet(
                           sources: _effectiveSources!,
                           currentSourceIndex: _currentSourceIndex,
+                          currentPlaybackAuthority: _sourceFetchAuthority,
                           resolveSource: _buildSourceSheetResolver(),
                           onSourceSelected: _handleSourceSelected,
+                          onSelectionIntent: _castRemoteActive
+                              ? (_) {
+                                  _castSourcePlaylistsByIntent.clear();
+                                  return _beginCastNavigation();
+                                }
+                              : null,
+                          resolveSourceWithIntent: _resolveCastSheetSourceWithIntent,
+                          onResolvedSourceSelected: (index, url, ticket) {
+                            unawaited(_handleSourceSelected(
+                              index, url, navigationGeneration: ticket,
+                            ));
+                          },
                           onClose: _hideSourceSheet,
                           seriesFetcher: fetcher,
                           currentSeason: se.season,
                           currentEpisode: se.episode,
                           onSourcesMerged: (merged) {
-                            if (!mounted) return;
+                            if (!mounted || sourceAuthority != _sourceFetchAuthority()) return;
                             setState(() => _augmentedSources = merged);
                           },
                         );
@@ -16193,6 +18422,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
           ),
         ),
       ),
+    ),
     );
   }
 
@@ -16934,6 +19164,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   Future<void> _showTracksSheet(BuildContext context) async {
+    if (_castRemoteActive && !kUnifiedPlayerMenuEnabled) {
+      _openPlayerMenuQuick(PlayerMenuSection.subtitles);
+      return;
+    }
     // Dynamically parse season/episode from current video's filename
     final currentTitle = _currentPlaybackTitleForIdentity();
     final seriesInfo = SeriesParser.parseFilename(currentTitle);
@@ -17228,13 +19462,35 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     await _refreshSubtitleAudioPolicy();
   }
 
-  Future<void> _menuSelectAudio(String audioId, String currentSubId) async {
+  Future<bool> _menuSelectAudio(String audioId, String currentSubId) async {
+    if (_castRemoteActive) {
+      final track = _castService.availableAudioTracks
+          .where((item) => item.id == audioId)
+          .firstOrNull;
+      if (track == null) return false;
+      final intent = _castManualLanguageTicket();
+      if (!intent.isCurrent) return false;
+      _castManualAudioChosen = true;
+      _castService.rememberAudioLanguage(track.language ?? track.label);
+      unawaited(_persistCastLanguageIntent(intent));
+      try {
+        await _castService.selectAudioTrack(audioId);
+        if (!intent.isCurrent) return false;
+        _castService.rememberAudioLanguage(track.language ?? track.label);
+        return true;
+      } on CastException catch (error) {
+        if (intent.isCurrent) _showCastFailure(error);
+        return false;
+      }
+    }
+
     final track = _player.state.tracks.audio
         .where((a) => a.id == audioId)
         .firstOrNull;
-    if (track == null) return;
+    if (track == null) return false;
     await _player.setAudioTrack(track);
     await _audioTrackChoiceChanged(audioId, currentSubId);
+    return true;
   }
 
   Future<bool> _withManualSubtitleChoice(Future<bool> Function() apply) async {
@@ -17258,8 +19514,26 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     }
   }
 
-  Future<bool> _menuSubtitlesOff(String audioId) =>
-      _withManualSubtitleChoice(() async {
+  Future<bool> _menuSubtitlesOff(String audioId) async {
+    if (_castRemoteActive) {
+      final intent = _castManualLanguageTicket();
+      bool current() => intent.isCurrent;
+      if (!current()) return false;
+      _castManualSubtitleChosen = true;
+      _castService.rememberSubtitlesDisabled();
+      unawaited(_persistCastLanguageIntent(intent));
+      try {
+        await _castService.disableSubtitles();
+        if (!current()) return false;
+        _castService.rememberSubtitlesDisabled();
+        _selectedStremioSubtitleId = null;
+        return true;
+      } on CastException catch (error) {
+        if (intent.isCurrent) _showCastFailure(error);
+        return false;
+      }
+    }
+    return _withManualSubtitleChoice(() async {
         final applied = await _setSubtitleTrackWithDiagnostics(
           mk.SubtitleTrack.no(),
           source: 'player-menu-off',
@@ -17269,9 +19543,41 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         await _menuApplyTrackChange(audioId, 'no');
         return true;
       });
+  }
 
-  Future<bool> _menuSelectEmbeddedSubtitle(String subId, String audioId) =>
-      _withManualSubtitleChoice(() async {
+  Future<bool> _menuSelectEmbeddedSubtitle(String subId, String audioId) async {
+    if (_castRemoteActive) {
+      final track = _castService.availableSubtitleTracks
+          .where((item) => item.id == subId)
+          .firstOrNull;
+      if (track == null) {
+        _showCastFailure(
+          const CastException(
+            'CAST_TRACK_NOT_FOUND',
+            'The requested subtitle track is no longer available.',
+          ),
+        );
+        return false;
+      }
+      final intent = _castManualLanguageTicket();
+      bool current() => intent.isCurrent;
+      if (!current()) return false;
+      _castManualSubtitleChosen = true;
+      _castService.rememberSubtitleLanguage(track.language ?? track.label);
+      unawaited(_persistCastLanguageIntent(intent));
+      try {
+        await _castService.selectSubtitleTrack(subId);
+        if (!current()) return false;
+        _castService.rememberSubtitleLanguage(track.language ?? track.label);
+        _selectedStremioSubtitleId =
+            _castStremioSubtitleTrackIds[subId]?.id;
+        return true;
+      } on CastException catch (error) {
+        if (intent.isCurrent) _showCastFailure(error);
+        return false;
+      }
+    }
+    return _withManualSubtitleChoice(() async {
         final track = _player.state.tracks.subtitle
             .where((s) => s.id == subId)
             .firstOrNull;
@@ -17290,48 +19596,122 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         await _menuApplyTrackChange(audioId, subId);
         return true;
       });
+  }
 
   /// Returns false when the download/apply failed — the panel keeps the
   /// previous selection (and its sync offset) in that case.
   Future<bool> _menuSelectAddonSubtitle(
     StremioSubtitle sub,
     String audioId,
-  ) => _withManualSubtitleChoice(() async {
-    // Playback continues behind the menu: if the content switches while the
-    // download is in flight (auto-advance, zap), applying the stale subtitle
-    // would attach it — and persist its ids — against the NEW item.
-    final token = _addonSubtitleFetchToken;
-    try {
-      final filePath = await _downloadStremioSubtitleToTempFile(sub);
-      if (filePath == null) {
+  ) async {
+    if (_castRemoteActive) {
+      final support = CastSubtitleSupport.classify(sub.url);
+      if (!support.supported) {
+        final code = switch (support.kind) {
+          CastSubtitleSupportKind.unreachable => 'CAST_SUBTITLE_UNREACHABLE',
+          CastSubtitleSupportKind.requiresConversion =>
+            'CAST_SUBTITLE_REQUIRES_CONVERSION',
+          CastSubtitleSupportKind.unsupportedFormat =>
+            'CAST_SUBTITLE_UNSUPPORTED_FORMAT',
+          CastSubtitleSupportKind.supported => 'CAST_TRACK_SELECTION_FAILED',
+        };
+        _showCastFailure(CastException(code, 'Subtitle cannot be sent to Cast.'));
+        return false;
+      }
+
+      final active = _activeCastRequest;
+      if (active == null) return false;
+      // Build an isolated request; no global subtitle state changes until the
+      // corresponding receiver LOAD has become authoritative.
+      final ticket = _beginCastNavigation();
+      final textTracks = _buildCastTextTracks(
+        extraSubtitle: sub, commitTrackIds: false,
+      );
+      final trackId = textTracks
+          .where((track) => track.url == sub.url)
+          .map((track) => track.id.toString())
+          .firstOrNull;
+      if (trackId == null) return false;
+
+      final candidate = active.copyWith(
+        position: _authoritativePosition,
+        duration: _authoritativeDuration,
+        textTracks: textTracks,
+        autoplay: _authoritativePlaying,
+      );
+      final previousTrackingState = _lastCastPlaybackState;
+      final presentationGeneration = ++_castPresentationGeneration;
+      _castSourceSwitchInProgress = true;
+      final loaded = await _loadCastReplacement(
+        candidate,
+        failureCode: 'CAST_SUBTITLE_UNREACHABLE',
+        failureMessage:
+            'The receiver could not reload the media with that WebVTT track.',
+        resetTrackingState: false,
+        navigationGeneration: ticket,
+      );
+      if (presentationGeneration == _castPresentationGeneration) {
+        _castSourceSwitchInProgress = false;
+      }
+      if (!_castIntentCurrent(ticket)) return false;
+      _lastCastPlaybackState = previousTrackingState;
+      if (!loaded) return false;
+      _castExtraSubtitle = sub;
+      _buildCastTextTracks();
+      final intent = _castManualLanguageTicket();
+      if (!intent.isCurrent) return false;
+      _castManualSubtitleChosen = true;
+      try {
+        _castService.rememberSubtitleLanguage(sub.lang);
+        unawaited(_persistCastLanguageIntent(intent));
+        await _castService.selectSubtitleTrack(trackId);
+        if (!intent.isCurrent || !_castIntentCurrent(ticket)) return false;
+        _castService.rememberSubtitleLanguage(sub.lang);
+        _selectedStremioSubtitleId = sub.id;
+        return true;
+      } on CastException catch (error) {
+        if (intent.isCurrent) _showCastFailure(error);
+        return false;
+      }
+    }
+
+    return _withManualSubtitleChoice(() async {
+      // Playback continues behind the menu: if the content switches while the
+      // download is in flight (auto-advance, zap), applying the stale subtitle
+      // would attach it — and persist its ids — against the NEW item.
+      final token = _addonSubtitleFetchToken;
+      try {
+        final filePath = await _downloadStremioSubtitleToTempFile(sub);
+        if (filePath == null) {
+          _showSubtitleFailureMessage(
+            'Couldn’t load subtitles. Check your connection or try another track.',
+          );
+          return false;
+        }
+        if (token != _addonSubtitleFetchToken || !mounted) {
+          return false;
+        }
+        final track = mk.SubtitleTrack.uri(
+          filePath,
+          title: sub.displayName,
+          language: sub.lang,
+        );
+        final applied = await _applyExternalSubtitleTrack(track);
+        if (!applied) return false;
+        if (token != _addonSubtitleFetchToken || !mounted) return false;
+        _selectedStremioSubtitleId = sub.id;
+        _setActiveExternalSubtitlePath(filePath);
+        await _menuApplyTrackChange(audioId, 'stremio:${sub.id}');
+        return true;
+      } catch (e) {
+        debugPrint('PlayerMenu: subtitle apply failed - $e');
         _showSubtitleFailureMessage(
-          'Couldn’t load subtitles. Check your connection or try another track.',
+          'Couldn’t apply subtitles. Try another embedded or online track.',
         );
         return false;
       }
-      if (token != _addonSubtitleFetchToken || !mounted) {
-        return false;
-      }
-      final track = mk.SubtitleTrack.uri(
-        filePath,
-        title: sub.displayName,
-        language: sub.lang,
-      );
-      final applied = await _applyExternalSubtitleTrack(track);
-      if (!applied) return false;
-      if (token != _addonSubtitleFetchToken || !mounted) return false;
-      _selectedStremioSubtitleId = sub.id;
-      _setActiveExternalSubtitlePath(filePath);
-      await _menuApplyTrackChange(audioId, 'stremio:${sub.id}');
-      return true;
-    } catch (e) {
-      debugPrint('PlayerMenu: subtitle apply failed - $e');
-      _showSubtitleFailureMessage(
-        'Couldn’t apply subtitles. Try another embedded or online track.',
-      );
-      return false;
-    }
-  });
+    });
+  }
 
   Future<bool> _applyStremioSubtitleFromTracksSheet(
     StremioSubtitle sub,
@@ -17369,13 +19749,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   });
 
   Widget _buildPlayerMenuPanel() {
+    final usingCast = _castRemoteActive;
     final audios = _player.state.tracks.audio
         .where((a) => a.id.toLowerCase() != 'no')
         .toList(growable: false);
     final embedded = embeddedSubtitleTracks(_player.state.tracks.subtitle);
-    final selectedSub = _selectedStremioSubtitleId != null
-        ? 'stremio:$_selectedStremioSubtitleId'
-        : _player.state.track.subtitle.id;
+    final selectedSub = usingCast
+        ? (_castService.selectedSubtitleTrack ?? 'no')
+        : (_selectedStremioSubtitleId != null
+              ? 'stremio:$_selectedStremioSubtitleId'
+              : _player.state.track.subtitle.id);
     // Captured, not read live: cache write-back must be keyed to the identity
     // the menu opened with (an identity fix re-keys through its own path).
     final cacheKey = _menuCacheKey;
@@ -17389,22 +19772,34 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       // stored explicit track for this title (restore treats a stored 'auto'
       // as "use the default selection"). Real tracks are numbered without it
       // so the file's first stream still reads "Track 1".
-      audioTracks: LanguageMapper.audioTrackOptions(
-        audios,
-        (id, label) => PlayerMenuTrackOption(id, label),
-      ),
-      selectedAudioId: _player.state.track.audio.id,
+      audioTracks: usingCast
+          ? [
+              for (final track in _castService.availableAudioTracks)
+                PlayerMenuTrackOption(track.id, track.displayLabel),
+            ]
+          : LanguageMapper.audioTrackOptions(
+              audios,
+              (id, label) => PlayerMenuTrackOption(id, label),
+            ),
+      selectedAudioId: usingCast
+          ? (_castService.selectedAudioTrack ?? '')
+          : _player.state.track.audio.id,
       onAudioSelected: _menuSelectAudio,
-      audioPassthrough: !kIsWeb && Platform.isAndroid
+      audioPassthrough: !usingCast && !kIsWeb && Platform.isAndroid
           ? _audioPassthroughEnabled
           : null,
-      onAudioPassthroughChanged: !kIsWeb && Platform.isAndroid
+      onAudioPassthroughChanged: !usingCast && !kIsWeb && Platform.isAndroid
           ? _setAudioPassthroughLive
           : null,
-      embeddedSubtitles: [
-        for (final (i, s) in embedded.indexed)
-          PlayerMenuTrackOption(s.id, LanguageMapper.labelForTrack(s, i)),
-      ],
+      embeddedSubtitles: usingCast
+          ? [
+              for (final track in _castService.availableSubtitleTracks)
+                PlayerMenuTrackOption(track.id, track.displayLabel),
+            ]
+          : [
+              for (final (i, s) in embedded.indexed)
+                PlayerMenuTrackOption(s.id, LanguageMapper.labelForTrack(s, i)),
+            ],
       selectedSubtitleId: selectedSub,
       onSubtitlesOff: _menuSubtitlesOff,
       onEmbeddedSubtitleSelected: _menuSelectEmbeddedSubtitle,
@@ -18090,8 +20485,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
             season ??= currentEp?.seriesInfo.season;
             episode ??= currentEp?.seriesInfo.episode;
           }
-          season ??= _currentStremioTvContentSeason ?? widget.contentSeason;
-          episode ??= _currentStremioTvContentEpisode ?? widget.contentEpisode;
+          season ??= _currentStremioTvContentTitle != null
+          ? _currentStremioTvContentSeason : widget.contentSeason;
+          episode ??= _currentStremioTvContentTitle != null
+          ? _currentStremioTvContentEpisode : widget.contentEpisode;
         }
       } else if (seriesPlaylist != null && seriesPlaylist.isSeries) {
         imdbId = seriesPlaylist.imdbId ?? _effectiveContentImdbId;

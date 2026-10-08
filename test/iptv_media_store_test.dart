@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:debrify/services/cast_player_authority.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -51,6 +52,28 @@ void main() {
     IptvMediaStore.debugLibraryClock = DateTime.now;
     WebDavSyncLibraryMutation.originDeviceId = 'local-device';
     WebDavSyncLibraryMutation.debugUserMutationObserver = null;
+  });
+
+  test('navigation after resume delete rolls back deletion and tombstones atomically', () async {
+    await IptvMediaStore.upsertVideoResume('replay-A',
+      const {'positionMs': 70000, 'durationMs': 100000});
+    final db = DebrifyTvDatabase.debugDatabaseOverride!;
+    final rowsBefore = await db.query('video_resume');
+    final stampsBefore = await db.query('webdav_sync_record_state');
+    const original = CastPlayerMediaIdentity(generation: 1, bridgeInstanceId: 'bridge',
+      sessionEpoch: 'session', mediaSessionId: 7, contentId: 'A', endedSequence: 1);
+    var current = original;
+    final ticket = CastPlayerEffectTicket(original, () => current);
+    // Existing production clock seam runs after DELETE, before tombstone writes.
+    IptvMediaStore.debugLibraryClock = () {
+      current = const CastPlayerMediaIdentity(generation: 2, bridgeInstanceId: 'bridge',
+        sessionEpoch: 'session', mediaSessionId: 8, contentId: 'B', endedSequence: 1);
+      return DateTime.fromMillisecondsSinceEpoch(5000);
+    };
+    await IptvMediaStore.removeVideoResume('replay-A', permitted: () => ticket.isCurrent);
+    expect(ticket.isCurrent, isFalse);
+    expect(await db.query('video_resume'), rowsBefore);
+    expect(await db.query('webdav_sync_record_state'), stampsBefore);
   });
 
   group('legacy prefs import', () {

@@ -54,6 +54,54 @@ class CastMediaRequestTest {
     }
 
     @Test
+    fun parsesReceiverReachableWebVttTrack() {
+        val request = CastMediaRequest.fromMap(
+            mapOf(
+                "url" to "https://media.example.test/movie.mp4",
+                "textTracks" to listOf(
+                    mapOf(
+                        "id" to 1001,
+                        "url" to "https://subs.example.test/es.vtt",
+                        "language" to "es-MX",
+                        "label" to "Spanish",
+                        "mimeType" to "text/vtt",
+                    ),
+                ),
+            ),
+        )
+        assertEquals(1, request.textTracks.size)
+        assertEquals(1001L, request.textTracks.single().id)
+        assertEquals("es-MX", request.textTracks.single().language)
+        assertEquals("text/vtt", request.textTracks.single().mimeType)
+    }
+
+    @Test
+    fun dropsUnsupportedOrReceiverUnreachableTextTracks() {
+        val request = CastMediaRequest.fromMap(
+            mapOf(
+                "url" to "https://media.example.test/movie.mp4",
+                "textTracks" to listOf(
+                    mapOf(
+                        "id" to 1001,
+                        "url" to "https://subs.example.test/es.srt",
+                        "language" to "es",
+                        "label" to "Spanish SRT",
+                        "mimeType" to "application/x-subrip",
+                    ),
+                    mapOf(
+                        "id" to 1002,
+                        "url" to "file:///data/user/0/com.debrify.app/cache/es.vtt",
+                        "language" to "es",
+                        "label" to "Private VTT",
+                        "mimeType" to "text/vtt",
+                    ),
+                ),
+            ),
+        )
+        assertTrue(request.textTracks.isEmpty())
+    }
+
+    @Test
     fun infersPriorityMimeTypes() {
         assertEquals(
             "application/x-mpegURL",

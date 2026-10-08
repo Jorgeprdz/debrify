@@ -1,0 +1,722 @@
+[
+  {
+    "id": "F01",
+    "original_category": "P1-01",
+    "severity": "P1",
+    "root_cause": "Current timed-out LOAD late success not reconciled",
+    "scope": "CastService/coordinator",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F02",
+    "original_category": "P1-02",
+    "severity": "P1",
+    "root_cause": "Late seek/control snapshot mutates superseded state",
+    "scope": "CastService",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F03",
+    "original_category": "P1-05",
+    "severity": "P1",
+    "root_cause": "Disconnect clears recovery with divergent receiver clock",
+    "scope": "CastService/player",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F04",
+    "original_category": "P1-04",
+    "severity": "P1",
+    "root_cause": "Old Activity disposal unregisters new channels",
+    "scope": "DebrifyCastManager",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F05",
+    "original_category": "P1-04",
+    "severity": "P1",
+    "root_cause": "EventSink lost across same-engine Activity recreation",
+    "scope": "DebrifyCastManager",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F06",
+    "original_category": "P1-04",
+    "severity": "P1",
+    "root_cause": "Late obsolete SDK session/client callbacks change authority",
+    "scope": "DebrifyCastManager",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F07",
+    "original_category": "P1-04",
+    "severity": "P1",
+    "root_cause": "Recreated disconnected bridge revision rejected",
+    "scope": "CastService/native",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F08",
+    "original_category": "P1-03",
+    "severity": "P1",
+    "root_cause": "Phase1 load epoch captured before initialization",
+    "scope": "CastService",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F09",
+    "original_category": "P1-09",
+    "severity": "P1",
+    "root_cause": "Hung physical result lacks retirement-safe fence",
+    "scope": "native/coordinator",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F10",
+    "original_category": "P1-07",
+    "severity": "P1",
+    "root_cause": "Internal MDBList switch writes target after stale awaits",
+    "scope": "MdblistScrobbleSession",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F11",
+    "original_category": "P1-08",
+    "severity": "P1",
+    "root_cause": "ENDED lacks full identity/generation ownership",
+    "scope": "player authority",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F12",
+    "original_category": "P1-08",
+    "severity": "P1",
+    "root_cause": "Lifecycle can resume parked local playback under Cast",
+    "scope": "player lifecycle",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F13",
+    "original_category": "P1-03",
+    "severity": "P1",
+    "root_cause": "Disconnect resumes old parked local source",
+    "scope": "player restore",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F14",
+    "original_category": "P1-08",
+    "severity": "P1",
+    "root_cause": "Outgoing tracking reads incoming LOAD clock",
+    "scope": "player tracking",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F15",
+    "original_category": "P1-07",
+    "severity": "P1",
+    "root_cause": "Delayed MDBList capability installs obsolete target",
+    "scope": "player MDBList init",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F16",
+    "original_category": "P1-08",
+    "severity": "P1",
+    "root_cause": "Completion uses launch identity and duplicates writes",
+    "scope": "completion/storage",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F17",
+    "original_category": "P1-05",
+    "severity": "P1",
+    "root_cause": "Failed newer provider freezes accepted unchanged source",
+    "scope": "player telemetry",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F18",
+    "original_category": "P1-03",
+    "severity": "P1",
+    "root_cause": "Failed local restore still grants local authority",
+    "scope": "restore effect boundary",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F19",
+    "original_category": "P1-01",
+    "severity": "P1",
+    "root_cause": "Episode sheet/previous opens local media under Cast",
+    "scope": "episode routing",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F20",
+    "original_category": "P1-07",
+    "severity": "P1",
+    "root_cause": "Async storage effect boundary lacks identity fence",
+    "scope": "StorageService/IPTV store",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F21",
+    "original_category": "P1-04",
+    "severity": "P1",
+    "root_cause": "Suspension retires resumable epoch permanently",
+    "scope": "native/service",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F22",
+    "original_category": "P1-04",
+    "severity": "P1",
+    "root_cause": "Delayed callback resurrects confirmed retired SDK object",
+    "scope": "native lifecycle",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F23",
+    "original_category": "P1-03",
+    "severity": "P1",
+    "root_cause": "Unconfirmed suspension allows local restore",
+    "scope": "native/service/player",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F24",
+    "original_category": "P1-08",
+    "severity": "P1",
+    "root_cause": "Autonomous trackers continue during receiver quarantine",
+    "scope": "player tracking/MDBList timers",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F25",
+    "original_category": "P1-02",
+    "severity": "P1",
+    "root_cause": "Late native command EventChannel snapshot bypasses stale MethodChannel ACK guard",
+    "scope": "CastService physical control authority",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F26",
+    "original_category": "P1-03",
+    "severity": "P1",
+    "root_cause": "Cancelled initial Cast handoff strands transfer ownership",
+    "scope": "player initial handoff",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F27",
+    "original_category": "P1-04",
+    "severity": "P1",
+    "root_cause": "Unknown obsolete ending callback inserts global blocker",
+    "scope": "native context observer",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F28",
+    "original_category": "P1-01",
+    "severity": "P1",
+    "root_cause": "Previous episode guide await occurs before intent capture",
+    "scope": "player previous episode",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F29",
+    "original_category": "P1-02",
+    "severity": "P1",
+    "root_cause": "Valid STOP unload rejected by postcommand media identity rule",
+    "scope": "CastService STOP transaction",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F30",
+    "original_category": "P1-09",
+    "severity": "P1",
+    "root_cause": "Retirement event before native error silently releases physical fence",
+    "scope": "coordinator physical-settled notification",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F31",
+    "original_category": "P1-04",
+    "severity": "P1",
+    "root_cause": "Connected epoch replacement lacks explicit recovery authority",
+    "scope": "service session adoption",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F32",
+    "original_category": "P1-08",
+    "severity": "P1",
+    "root_cause": "Local pause failure published as successful Cast handoff",
+    "scope": "initial/restore handoff",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F33",
+    "original_category": "P1-01",
+    "severity": "P1",
+    "root_cause": "Local provider completion mints new Cast intent after ownership change",
+    "scope": "source selection owner transition",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F34",
+    "original_category": "P1-06",
+    "severity": "P1",
+    "root_cause": "Older manual same-media ACK overwrites newer manual language intent",
+    "scope": "player manual track revisions",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F35",
+    "original_category": "P1-06",
+    "severity": "P1",
+    "root_cause": "No per-series Cast language/OFF persistence; ephemeral LOCAL IDs cannot substitute",
+    "scope": "profile-scoped Cast language storage",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F36",
+    "original_category": "P1-07",
+    "severity": "P1",
+    "root_cause": "Permission return after SQL deletion can commit partial tombstone transaction",
+    "scope": "IPTV resume atomic cancellation",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F37",
+    "original_category": "P1-09",
+    "severity": "P1",
+    "root_cause": "Blocked initial handoff Cast action cannot reach termination controller",
+    "scope": "transfer recovery controller",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F38",
+    "original_category": "P1-08",
+    "severity": "P1",
+    "root_cause": "Failed pause yield leaks old local tracking timers/effects",
+    "scope": "transfer telemetry ownership",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F39",
+    "original_category": "P1-07",
+    "severity": "P1",
+    "root_cause": "WebDAV exclusive preference barrier could allow revoked identity to write",
+    "scope": "ProfilePreferences._write; StorageService language map",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F40",
+    "original_category": "P1-08",
+    "severity": "P1",
+    "root_cause": "Direct local controls or PiP could execute during Cast transfer",
+    "scope": "player ownership controls",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F41",
+    "original_category": "P1-01",
+    "severity": "P1",
+    "root_cause": "Old addon/pack/engine provider results could merge into another episode",
+    "scope": "SourceSheet fetch context",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F42",
+    "original_category": "P1-01",
+    "severity": "P1",
+    "root_cause": "Current sheet selection invalidated itself on its own parent authority rebuild",
+    "scope": "SourceSheet selection/fetch authority",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F43",
+    "original_category": "P1-01",
+    "severity": "P1",
+    "root_cause": "Current-source A tap failed to supersede pending B selection",
+    "scope": "SourceSheet A\u2192B\u2192A",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F44",
+    "original_category": "P1-06",
+    "severity": "P1",
+    "root_cause": "Old profile could bind series/manual language authority before validating scope",
+    "scope": "player original profile and manual ticket",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F45",
+    "original_category": "P1-04",
+    "severity": "P1",
+    "root_cause": "Physical success cleared a receiver decoder-error latch",
+    "scope": "native receiver error snapshot",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F46",
+    "original_category": "P1-03",
+    "severity": "P1",
+    "root_cause": "Deferred session adoption ignored local source changes during refresh",
+    "scope": "player restored adoption",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F47",
+    "original_category": "P1-03",
+    "severity": "P1",
+    "root_cause": "Receiver reconnect during local restore could still publish local playback",
+    "scope": "player restore continuous receiver fence",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  },
+  {
+    "id": "F48",
+    "original_category": "P1-08",
+    "severity": "P1",
+    "root_cause": "Sleep/lifecycle intent changed during deferred restore, yield or rollback play",
+    "scope": "player live intent at dispatch and receiver sleep pause",
+    "status": "CLOSED \u2014 STATIC SOURCE REVIEW",
+    "closure_evidence": [
+      "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+      "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+      "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD"
+    ],
+    "limits": "No execution/runtime claim; closure applies to exact reviewed source traces"
+  }
+]

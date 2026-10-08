@@ -1,3 +1,4 @@
+import 'cast_player_authority.dart';
 import '../models/media_identity.dart';
 import '../models/subtitle_source_priority.dart';
 import '../models/custom_series_identity.dart';
@@ -2737,10 +2738,11 @@ class StorageService {
   }
 
   /// Remove a continue watching entry by IMDB ID.
-  static Future<void> removeContinueWatchingItem(String imdbId) async {
+  static Future<void> removeContinueWatchingItem(String imdbId, {bool Function()? permitted}) async {
     final normalized = imdbId.trim().toLowerCase();
     if (normalized.isEmpty) return;
     final prefs = await ProfilePreferences.instance();
+    if (permitted != null && !permitted()) return;
     final raw = prefs.getString(_continueWatchingKey);
     if (raw == null || raw.isEmpty) return;
     try {
@@ -2757,7 +2759,8 @@ class StorageService {
         ) == normalized,
       );
       if (items.length == before) return;
-      await _saveContinueWatchingItems(items);
+      if (permitted != null && !permitted()) return;
+      await _saveContinueWatchingItems(items, permitted: permitted);
     } catch (_) {}
   }
 
@@ -2774,10 +2777,13 @@ class StorageService {
   static Future<void> _saveContinueWatchingItems(
     List<Map<String, dynamic>> items, {
     bool tombstoneRemovals = true,
+    bool Function()? permitted,
   }) async {
     final prefs = await ProfilePreferences.instance();
+    if (permitted != null && !permitted()) return;
     if (tombstoneRemovals) {
       final previous = await getContinueWatchingItems();
+      if (permitted != null && !permitted()) return;
       final retained = <String>{
         for (final item in items)
           if ((item['imdbId']?.toString().trim().toLowerCase() ?? '')
@@ -2793,7 +2799,9 @@ class StorageService {
             .map(WebDavSyncRecordKey.continueWatching),
       );
     }
-    await prefs.setString(_continueWatchingKey, jsonEncode(items));
+    if (permitted != null && !permitted()) return;
+    if (permitted == null) await prefs.setString(_continueWatchingKey, jsonEncode(items));
+    else await prefs.setStringGuarded(_continueWatchingKey, jsonEncode(items), permitted: permitted);
   }
 
   /// Movies finished locally by the Debrify player. This intentionally stays
@@ -2822,20 +2830,25 @@ class StorageService {
   /// Mark a locally tracked movie finished, remove it from Continue Watching,
   /// and clear its resumable state. The finished record itself remains so the
   /// detail action can accurately read "Rewatch".
-  static Future<void> markMovieAsFinished(String imdbId) async {
+  static Future<void> markMovieAsFinished(String imdbId, {bool Function()? permitted}) async {
     imdbId = MediaIdentity.progressId(imdbId, 'movie');
     final normalized = imdbId.trim().toLowerCase();
     if (normalized.isEmpty) return;
 
     final finished = await _getFinishedMovieIds();
+    if (permitted != null && !permitted()) return;
     if (finished.add(normalized)) {
       final prefs = await ProfilePreferences.instance();
-      await prefs.setStringList(_finishedMoviesKey, finished.toList()..sort());
+      if (permitted != null && !permitted()) return;
+      final values = finished.toList()..sort();
+      if (permitted == null) await prefs.setStringList(_finishedMoviesKey, values);
+      else await prefs.setStringListGuarded(_finishedMoviesKey, values, permitted: permitted);
+      if (permitted != null && !permitted()) return;
       localCompletionRevision.value++;
     }
     await Future.wait([
-      removeContinueWatchingItem(normalized),
-      clearPlaybackStateByImdbId(normalized),
+      removeContinueWatchingItem(normalized, permitted: permitted),
+      clearPlaybackStateByImdbId(normalized, permitted: permitted),
     ]);
     debugPrint('StorageService: markMovieAsFinished imdbId="$normalized"');
   }
@@ -2915,10 +2928,11 @@ class StorageService {
   }
 
   /// Remove all playback state entries (series progress, video progress) for an IMDB ID.
-  static Future<void> clearPlaybackStateByImdbId(String imdbId) async {
+  static Future<void> clearPlaybackStateByImdbId(String imdbId, {bool Function()? permitted}) async {
     final normalized = imdbId.trim().toLowerCase();
     if (normalized.isEmpty) return;
     final map = await _getPlaybackStateMap();
+    if (permitted != null && !permitted()) return;
     final keysToRemove = <String>[];
     for (final entry in map.entries) {
       if (entry.value is Map<String, dynamic> &&
@@ -2931,9 +2945,10 @@ class StorageService {
     for (final key in keysToRemove) {
       map.remove(key);
     }
-    await _savePlaybackStateMap(map, recordDeletions: true);
+    await _savePlaybackStateMap(map, recordDeletions: true, permitted: permitted);
     // Series finished-episode markers share this map, so clearing a Continue
     // Watching item must also invalidate derived series completion.
+    if (permitted != null && !permitted()) return;
     localCompletionRevision.value++;
     debugPrint(
       'StorageService: Cleared ${keysToRemove.length} playback state entries for "$imdbId"',
@@ -2968,12 +2983,15 @@ class StorageService {
   static Future<void> _savePlaybackStateMap(
     Map<String, dynamic> map, {
     bool recordDeletions = false,
+    bool Function()? permitted,
   }) async {
     final prefs = await ProfilePreferences.instance();
+    if (permitted != null && !permitted()) return;
     if (recordDeletions &&
         (PlaybackRecoveryIntent.isSupported ||
             await WebDavSyncTombstoneRecorder.shouldRecordForCurrentProfile())) {
       final previous = await _getPlaybackStateMap();
+      if (permitted != null && !permitted()) return;
       if (PlaybackRecoveryIntent.isSupported) {
         await PlaybackRecoveryIntent.record(
           _playbackRecoveryRecordKeys(
@@ -2981,12 +2999,15 @@ class StorageService {
           ).difference(_playbackRecoveryRecordKeys(map)),
         );
       }
+      if (permitted != null && !permitted()) return;
       final retained = _webDavPlaybackRecordKeys(map);
       await WebDavSyncTombstoneRecorder.recordForCurrentProfile(
         _webDavPlaybackRecordKeys(previous).difference(retained),
       );
     }
-    await prefs.setString(_playbackStateKey, jsonEncode(map));
+    if (permitted != null && !permitted()) return;
+    if (permitted == null) await prefs.setString(_playbackStateKey, jsonEncode(map));
+    else await prefs.setStringGuarded(_playbackStateKey, jsonEncode(map), permitted: permitted);
   }
 
   static Set<String> _playbackRecoveryRecordKeys(Map<String, dynamic> map) => {
@@ -3216,12 +3237,14 @@ class StorageService {
     required int episode,
     String? imdbId,
     int? recoveryUpdatedAtMs,
+    bool Function()? permitted,
   }) async {
     // Recovery is a historical observation, not a new playback event. Both
     // records must keep its original time so the latest episode remains last.
     final completedAtMs =
         recoveryUpdatedAtMs ?? DateTime.now().millisecondsSinceEpoch;
     final map = await _getPlaybackStateMap();
+    if (permitted != null && !permitted()) return;
     final key = _seriesProgressKey(seriesTitle, imdbId);
 
     if (!map.containsKey(key)) {
@@ -3295,7 +3318,8 @@ class StorageService {
       'StorageService: markEpisodeAsFinished title="$seriesTitle" S${season}E$episode',
     );
 
-    await _savePlaybackStateMap(map);
+    await _savePlaybackStateMap(map, permitted: permitted);
+    if (permitted != null && !permitted()) return;
     localCompletionRevision.value++;
   }
 
@@ -4515,16 +4539,64 @@ class StorageService {
   static Future<void> removeVideoResume(
     String key, {
     bool playbackCheckpoint = false,
+    bool Function()? permitted,
     WebDavSyncMutationOrigin origin = WebDavSyncMutationOrigin.user,
   }) {
     return IptvMediaStore.removeVideoResume(
       key,
       origin: origin,
       playbackCheckpoint: playbackCheckpoint,
+      permitted: permitted,
     );
   }
 
   /// Save audio and subtitle preferences for series content
+  static const _castSeriesLanguageKey = 'cast_series_language_preferences_v1';
+  static final Lock _castSeriesLanguageWriteLock = Lock();
+
+  static Future<CastPlayerSeriesLanguagePreference?> getSeriesCastLanguagePreferences(
+    String seriesIdentity, {bool Function()? permitted}) async {
+    final prefs = await ProfilePreferences.instance();
+    if (permitted != null && !permitted()) return null;
+    final raw = prefs.getString(_castSeriesLanguageKey);
+    if (raw == null) return null;
+    try {
+      final decoded = await decodeJsonAsync(raw);
+      if (permitted != null && !permitted()) return null;
+      if (decoded is! Map || decoded[seriesIdentity] is! Map) return null;
+      return CastPlayerSeriesLanguagePreference.fromMap(seriesIdentity,
+        Map<String, dynamic>.from(decoded[seriesIdentity] as Map));
+    } catch (_) { return null; }
+  }
+
+  static Future<void> saveSeriesCastLanguagePreferences(
+    CastPlayerSeriesLanguagePreference preference, {required bool Function() permitted}) {
+    final profile = ProfileRuntime.scope.value;
+    bool current() => permitted() && profile == ProfileRuntime.scope.value;
+    return _castSeriesLanguageWriteLock.synchronized(() async {
+      if (!current()) return;
+      final prefs = await ProfilePreferences.instance();
+      if (!current()) return;
+      await prefs.mutateStringAtomically(_castSeriesLanguageKey, (raw) {
+        final decoded = raw == null ? <String, dynamic>{} : jsonDecode(raw);
+        final map = decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{};
+        final old = map[preference.seriesIdentity];
+        final row = old is Map ? Map<String, dynamic>.from(old) : <String, dynamic>{};
+        if (preference.updateAudio) {
+          if (preference.audioLanguage == null) row.remove('audioLanguage');
+          else row['audioLanguage'] = preference.audioLanguage;
+        }
+        if (preference.updateSubtitle) {
+          if (preference.subtitleLanguage == null) row.remove('subtitleLanguage');
+          else row['subtitleLanguage'] = preference.subtitleLanguage;
+          row['subtitlesDisabled'] = preference.subtitlesDisabled;
+        }
+        map[preference.seriesIdentity] = row;
+        return jsonEncode(map);
+      }, permitted: current);
+    });
+  }
+
   static Future<void> saveSeriesTrackPreferences({
     required String seriesTitle,
     required String audioTrackId,
@@ -4773,10 +4845,13 @@ class StorageService {
   static Future<void> savePlaylistItemsRaw(
     List<Map<String, dynamic>> items, {
     bool recordSyncDeletions = true,
+    bool Function()? permitted,
   }) async {
     final prefs = await ProfilePreferences.instance();
+    if (permitted != null && !permitted()) return;
     if (recordSyncDeletions) {
       final previous = await getPlaylistItemsRaw();
+      if (permitted != null && !permitted()) return;
       final retained = items.map(computePlaylistDedupeKey).toSet();
       await WebDavSyncTombstoneRecorder.recordForCurrentProfile(
         previous
@@ -4785,7 +4860,9 @@ class StorageService {
             .map(WebDavSyncRecordKey.playlistItem),
       );
     }
-    await prefs.setString(_playlistKey, jsonEncode(items));
+    if (permitted != null && !permitted()) return;
+    if (permitted == null) await prefs.setString(_playlistKey, jsonEncode(items));
+    else await prefs.setStringGuarded(_playlistKey, jsonEncode(items), permitted: permitted);
   }
 
   static String computePlaylistDedupeKey(Map<String, dynamic> item) =>
@@ -5067,6 +5144,7 @@ class StorageService {
   /// Supports both RealDebrid (rdTorrentId) and PikPak (pikpakCollectionId)
   static Future<bool> updatePlaylistItemPoster(
     String posterUrl, {
+    bool Function()? permitted,
     String? rdTorrentId,
     String? torboxTorrentId,
     String? pikpakCollectionId,
@@ -5086,6 +5164,7 @@ class StorageService {
     debugPrint('  webDavPath: $webDavPath');
 
     final items = await getPlaylistItemsRaw();
+    if (permitted != null && !permitted()) return false;
     debugPrint('  Total playlist items: ${items.length}');
 
     int itemIndex = -1;
@@ -5218,7 +5297,8 @@ class StorageService {
 
     debugPrint('  💾 Saving poster to item at index $itemIndex');
     items[itemIndex]['posterUrl'] = posterUrl;
-    await savePlaylistItemsRaw(items);
+    await savePlaylistItemsRaw(items, recordSyncDeletions: false, permitted: permitted);
+    if (permitted != null && !permitted()) return false;
     debugPrint('  ✅ Poster saved successfully!');
     return true;
   }
@@ -5232,8 +5312,10 @@ class StorageService {
     String? premiumizeItemId,
     String? allDebridHash,
     bool force = false,
+    bool Function()? permitted,
   }) async {
     final items = await getPlaylistItemsRaw();
+    if (permitted != null && !permitted()) return false;
     int itemIndex = -1;
 
     if (rdTorrentId != null && rdTorrentId.isNotEmpty) {
@@ -5307,7 +5389,8 @@ class StorageService {
     }
 
     items[itemIndex]['imdbId'] = imdbId;
-    await savePlaylistItemsRaw(items);
+    await savePlaylistItemsRaw(items, recordSyncDeletions: false, permitted: permitted);
+    if (permitted != null && !permitted()) return false;
     debugPrint(
       'StorageService: Saved imdbId $imdbId to playlist item "${items[itemIndex]['title']}"',
     );

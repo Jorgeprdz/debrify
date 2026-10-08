@@ -66,6 +66,7 @@ class Controls extends StatelessWidget {
   final bool castConnected;
   final bool castConnecting;
   final bool castError;
+  final String? castDeviceName;
   final VoidCallback? onCast;
 
   /// Record control for live IPTV (libmpv `stream-record`). Shown only when a
@@ -170,6 +171,7 @@ class Controls extends StatelessWidget {
     this.castConnected = false,
     this.castConnecting = false,
     this.castError = false,
+    this.castDeviceName,
     this.onCast,
     this.hasRecord = false,
     this.isRecording = false,
@@ -289,6 +291,7 @@ class Controls extends StatelessWidget {
       castConnected: castConnected,
       castConnecting: castConnecting,
       castError: castError,
+      castDeviceName: castDeviceName,
       onCast: onCast,
       hasNext: hasNext,
       hasPrevious: hasPrevious,
@@ -453,6 +456,21 @@ class Controls extends StatelessWidget {
                             style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 12,
+                            ),
+                          ),
+                        ],
+                        if (castConnected &&
+                            castDeviceName?.trim().isNotEmpty == true) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'CASTING TO: ${castDeviceName!.trim()}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.5,
                             ),
                           ),
                         ],

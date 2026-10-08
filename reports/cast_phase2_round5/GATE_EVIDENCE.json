@@ -1,0 +1,446 @@
+{
+  "source_sha256": "4c26b097a487ef9afd3568daa59a2961f4a9a9262755bf46504b0779e75b23b3",
+  "reviewed_at": "2026-10-08T03:10:22.439920+00:00",
+  "p0_open": 0,
+  "p1_open": 0,
+  "independent_audit": "PASS",
+  "gates": {
+    "G01": {
+      "status": "PASS",
+      "scope": "Dependency and remote",
+      "rationale": "Live PR3 remains open on the exact phase1 ancestor; phase2 remote remains historical baseline. Recovered eight objects were SHA1-verified and reconciled contextually, including player hunks.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "reports/cast_phase2_round5/REMOTE_AND_PUBLICATION_EVIDENCE.json",
+          "sha256": "5e6c764bca4bdbd6995e5487c73bdc0ab065fa5d10ed4c1c4d9f68fa87bcc0e0"
+        },
+        {
+          "file": "reports/cast_phase2_round5/RECOVERED_OBJECTS.json",
+          "sha256": "5a5a1a545284dfcf46ca64853d6f64ae563f539e3fb2fde8eb77042aaf91aacb"
+        }
+      ]
+    },
+    "G02": {
+      "status": "PASS",
+      "scope": "Full scoped P0 audit",
+      "rationale": "Changed Dart/native/player/storage boundaries and Phase1 contracts were reread; no confirmed P0 is open. This is scoped source evidence, not total runtime correctness.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+          "sha256": "f661820842b95a4fb2ba346aec44b9a5c438969b56ceca106611869cf84725d5"
+        },
+        {
+          "file": "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+          "sha256": "25883fd6a7ac2cb6b677bd0941583b1cb0247059f3d56e6c1595c7243f76faf9"
+        },
+        {
+          "file": "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+          "sha256": "655495f5466c55e546727426d8796b637c46ec40c1cba897aadc4bab16c25c1f"
+        },
+        {
+          "file": "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD",
+          "sha256": "f8a5fa9871c5f9b49ed0a80ce43f3fdb551e6cbec73c1463eacf91e72470515d"
+        },
+        {
+          "file": "lib/services/cast_service.dart",
+          "sha256": "76cf98ae59ac7a8691091bd3e3290c234c0f3cd827ca1969f091ef33eaa6ab8a"
+        },
+        {
+          "file": "android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastManager.kt",
+          "sha256": "6260aea7de5029e217a7ff15c08dabd7555a1130bc93c4a64f7fcd32f0cb097e"
+        },
+        {
+          "file": "lib/screens/video_player_screen.dart",
+          "sha256": "f912e80a9b7ae3a234035bba2b9e9775b122f95928237b9243e037cbe8813a54"
+        }
+      ]
+    },
+    "G03": {
+      "status": "PASS",
+      "scope": "P1-01 through P1-10 closure",
+      "rationale": "All original categories and 48 detailed source findings closed by final cross-author traces; late commands, tracking and restore authority remain explicit.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+          "sha256": "f661820842b95a4fb2ba346aec44b9a5c438969b56ceca106611869cf84725d5"
+        },
+        {
+          "file": "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+          "sha256": "25883fd6a7ac2cb6b677bd0941583b1cb0247059f3d56e6c1595c7243f76faf9"
+        },
+        {
+          "file": "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+          "sha256": "655495f5466c55e546727426d8796b637c46ec40c1cba897aadc4bab16c25c1f"
+        },
+        {
+          "file": "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD",
+          "sha256": "f8a5fa9871c5f9b49ed0a80ce43f3fdb551e6cbec73c1463eacf91e72470515d"
+        },
+        {
+          "file": "reports/cast_phase2_round5/FINDING_LEDGER.json",
+          "sha256": "56e847c19f4b8c857d6a42c719ff1068891e231e1c367a8bf5c8a10e941e6020"
+        }
+      ]
+    },
+    "G04": {
+      "status": "PASS",
+      "scope": "Intent before awaits",
+      "rationale": "Tap/previous/episode/provider intents are captured synchronously; nested continuations retain ticket/profile. Old local provider results cannot promote a new Cast intent.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "lib/screens/video_player/widgets/source_sheet.dart",
+          "sha256": "f1d8886d58cce4a19f0f28121c3ba9e63104f6c25943f2e286e02ff783f12918"
+        },
+        {
+          "file": "lib/screens/video_player_screen.dart",
+          "sha256": "f912e80a9b7ae3a234035bba2b9e9775b122f95928237b9243e037cbe8813a54"
+        },
+        {
+          "file": "lib/services/cast_load_coordinator.dart",
+          "sha256": "34627ee2efc621ad47f955ed53be7449b9b0b51725e7601ab94f1f0297e3c6ae"
+        }
+      ]
+    },
+    "G05": {
+      "status": "PASS",
+      "scope": "Physical command serialization",
+      "rationale": "Coordinator and native ledger retain physical LOAD/control exclusion after logical timeout/supersession. Controls include exact expected epoch/URL/SID. No cancellation is inferred from a deadline.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "lib/services/cast_load_coordinator.dart",
+          "sha256": "34627ee2efc621ad47f955ed53be7449b9b0b51725e7601ab94f1f0297e3c6ae"
+        },
+        {
+          "file": "lib/services/cast_service.dart",
+          "sha256": "76cf98ae59ac7a8691091bd3e3290c234c0f3cd827ca1969f091ef33eaa6ab8a"
+        },
+        {
+          "file": "android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastManager.kt",
+          "sha256": "6260aea7de5029e217a7ff15c08dabd7555a1130bc93c4a64f7fcd32f0cb097e"
+        }
+      ]
+    },
+    "G06": {
+      "status": "PASS",
+      "scope": "Verified restoration",
+      "rationale": "Fresh receiver identity is checked before adoption, with local effect ticket across refresh. Local restore opens committed B before seek/play and continuously requires retired receiver/no physical uncertainty/same profile.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "lib/services/cast_service.dart",
+          "sha256": "76cf98ae59ac7a8691091bd3e3290c234c0f3cd827ca1969f091ef33eaa6ab8a"
+        },
+        {
+          "file": "lib/screens/video_player_screen.dart",
+          "sha256": "f912e80a9b7ae3a234035bba2b9e9775b122f95928237b9243e037cbe8813a54"
+        },
+        {
+          "file": "lib/services/cast_player_authority.dart",
+          "sha256": "254d60bb81b2334873d6bdaba49a6883b45ce34af72807d2460cd4ff15c334e6"
+        }
+      ]
+    },
+    "G07": {
+      "status": "PASS",
+      "scope": "Epoch and snapshot revision",
+      "rationale": "Opaque bridge and session IDs, per-bridge monotonic snapshots and retired-session tombstones prevent old Activity/client/epoch callbacks from reviving or overwriting current state.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "lib/services/cast_service.dart",
+          "sha256": "76cf98ae59ac7a8691091bd3e3290c234c0f3cd827ca1969f091ef33eaa6ab8a"
+        },
+        {
+          "file": "android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastManager.kt",
+          "sha256": "6260aea7de5029e217a7ff15c08dabd7555a1130bc93c4a64f7fcd32f0cb097e"
+        }
+      ]
+    },
+    "G08": {
+      "status": "PASS",
+      "scope": "Receiver divergence",
+      "rationale": "Wire snapshot is separate from accepted media clock. Late/expired A is quarantined, including paired ACK/EventChannel delivery; recovery requires confirmed identity, not fictitious B playback.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "lib/services/cast_service.dart",
+          "sha256": "76cf98ae59ac7a8691091bd3e3290c234c0f3cd827ca1969f091ef33eaa6ab8a"
+        },
+        {
+          "file": "lib/screens/video_player_screen.dart",
+          "sha256": "f912e80a9b7ae3a234035bba2b9e9775b122f95928237b9243e037cbe8813a54"
+        }
+      ]
+    },
+    "G09": {
+      "status": "PASS",
+      "scope": "Transactional tracks",
+      "rationale": "Manual revision and original profile/series/media fence late choices; language/OFF uses additive per-series storage. Subtitle replacement validates WebVTT and only commits current verified media; logical rollback preserves previous intent without claiming physical rollback.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "lib/services/cast_service.dart",
+          "sha256": "76cf98ae59ac7a8691091bd3e3290c234c0f3cd827ca1969f091ef33eaa6ab8a"
+        },
+        {
+          "file": "lib/services/cast_phase2_policy.dart",
+          "sha256": "5b60d1fadcf8661be76e16cc403559518d510da62aeaf28c782ba08a57052e5d"
+        },
+        {
+          "file": "lib/screens/video_player_screen.dart",
+          "sha256": "f912e80a9b7ae3a234035bba2b9e9775b122f95928237b9243e037cbe8813a54"
+        },
+        {
+          "file": "lib/services/storage_service.dart",
+          "sha256": "dc6e59a7496c1403f80c8127925e89424e68b536ee0eca885e45ad536a0d99b4"
+        },
+        {
+          "file": "lib/services/profiles/profile_preferences.dart",
+          "sha256": "88bb07926919f3dbf25469ec683c65153c36df044240bf553abaebcdb929bfc9"
+        }
+      ]
+    },
+    "G10": {
+      "status": "PASS",
+      "scope": "Metadata EPG MDBList",
+      "rationale": "Internal preload/save/adjacent/guide/MDBList helpers bind generation, media/profile and playlist target. Preference guards recheck after hidden WebDAV barrier; database cancellation rolls back the whole deletion/tombstone transaction.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "lib/screens/video_player_screen.dart",
+          "sha256": "f912e80a9b7ae3a234035bba2b9e9775b122f95928237b9243e037cbe8813a54"
+        },
+        {
+          "file": "lib/services/mdblist/mdblist_scrobble_session.dart",
+          "sha256": "042d7ed792e73c7a69705b163d1d782375733194cc5f91234f4f0ad505d5f655"
+        },
+        {
+          "file": "lib/services/storage_service.dart",
+          "sha256": "dc6e59a7496c1403f80c8127925e89424e68b536ee0eca885e45ad536a0d99b4"
+        },
+        {
+          "file": "lib/services/profiles/profile_preferences.dart",
+          "sha256": "88bb07926919f3dbf25469ec683c65153c36df044240bf553abaebcdb929bfc9"
+        },
+        {
+          "file": "lib/services/iptv_media_store.dart",
+          "sha256": "4e316f599fd928f514e6bd5eec20fcbad11e0b156822ef77bf5a2f7fe9dc93c4"
+        }
+      ]
+    },
+    "G11": {
+      "status": "PASS",
+      "scope": "Exactly-once ended and tracking",
+      "rationale": "Ended identity includes navigation, bridge, epoch, media SID, content URL and ended sequence. Completion gate/immutable targets and per-tracker ordered effects preserve outgoing A clock and reject obsolete continuations.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "lib/screens/video_player_screen.dart",
+          "sha256": "f912e80a9b7ae3a234035bba2b9e9775b122f95928237b9243e037cbe8813a54"
+        },
+        {
+          "file": "lib/services/cast_player_authority.dart",
+          "sha256": "254d60bb81b2334873d6bdaba49a6883b45ce34af72807d2460cd4ff15c334e6"
+        },
+        {
+          "file": "lib/services/mdblist/mdblist_scrobble_session.dart",
+          "sha256": "042d7ed792e73c7a69705b163d1d782375733194cc5f91234f4f0ad505d5f655"
+        }
+      ]
+    },
+    "G12": {
+      "status": "PASS",
+      "scope": "Hung native recovery",
+      "rationale": "Watchdog/post-dispatch ambiguity preserves physical ledger and Result. Only actual completion or SDK-confirmed retirement releases exclusion. Controller remains reachable during blocked transfer; physical-drain notification handles retirement event before Result.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastManager.kt",
+          "sha256": "6260aea7de5029e217a7ff15c08dabd7555a1130bc93c4a64f7fcd32f0cb097e"
+        },
+        {
+          "file": "lib/services/cast_load_coordinator.dart",
+          "sha256": "34627ee2efc621ad47f955ed53be7449b9b0b51725e7601ab94f1f0297e3c6ae"
+        },
+        {
+          "file": "lib/services/cast_service.dart",
+          "sha256": "76cf98ae59ac7a8691091bd3e3290c234c0f3cd827ca1969f091ef33eaa6ab8a"
+        },
+        {
+          "file": "lib/screens/video_player_screen.dart",
+          "sha256": "f912e80a9b7ae3a234035bba2b9e9775b122f95928237b9243e037cbe8813a54"
+        }
+      ]
+    },
+    "G13": {
+      "status": "PASS",
+      "scope": "Phase1 compatibility",
+      "rationale": "Existing public service/load validation/channel names/options and request-map shape preserved. Initialization precedes epoch capture. LOCAL sheet flow, separate LOCAL track IDs and platform/headers/split-stream policy stay intact.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "lib/services/cast_service.dart",
+          "sha256": "76cf98ae59ac7a8691091bd3e3290c234c0f3cd827ca1969f091ef33eaa6ab8a"
+        },
+        {
+          "file": "lib/services/cast_phase2_policy.dart",
+          "sha256": "5b60d1fadcf8661be76e16cc403559518d510da62aeaf28c782ba08a57052e5d"
+        },
+        {
+          "file": "lib/screens/video_player/widgets/source_sheet.dart",
+          "sha256": "f1d8886d58cce4a19f0f28121c3ba9e63104f6c25943f2e286e02ff783f12918"
+        },
+        {
+          "file": "lib/services/storage_service.dart",
+          "sha256": "dc6e59a7496c1403f80c8127925e89424e68b536ee0eca885e45ad536a0d99b4"
+        },
+        {
+          "file": "test/services/cast_service_test.dart",
+          "sha256": "46e1cde2b5c26ff00c3ebc927a1bd856d25440f3d3a1301c4f8504a4f6778b2f"
+        },
+        {
+          "file": "test/services/cast_stream_security_round5_test.dart",
+          "sha256": "1703fcbfab6efb570c85dafa0d9b70239f364197980c351ca8025bcf7d12889a"
+        }
+      ]
+    },
+    "G14": {
+      "status": "PASS",
+      "scope": "45 distinct authored regressions",
+      "rationale": "I01\u2013I06/L07\u2013L12/C13\u2013C18/S19\u2013S24/R25\u2013R30/T31\u2013T36/E37\u2013E42/P43\u2013P45 have unique production-connected bodies and concrete assertions; all names/lines/assertions match source. Authored, never run.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "reports/cast_phase2_round5/REGRESSION_CASES.json",
+          "sha256": "584a5c118a39ee698b37a8274f73d84147d0612562adb8447a2021278701c9f6"
+        },
+        {
+          "file": "reports/cast_phase2_round5/REGRESSION_45_MATRIX.md",
+          "sha256": "958729f1ea6ddd9c0b77df85004e4f7cca8f73989b4642111e05ef504b15b066"
+        },
+        {
+          "file": "reports/cast_phase2_round5/ADDITIONAL_REGRESSION_INVENTORY.json",
+          "sha256": "edb684ef881e45c9adb6dc3d79f95d247f9012ceb5430d55bc27b09a4e90a981"
+        }
+      ]
+    },
+    "G15": {
+      "status": "PASS",
+      "scope": "Diff and static verification",
+      "rationale": "git diff --check and source delimiter/local import/wire/matrix/hash checks are required by the static script. These checks do not parse/typecheck/execute Dart or Kotlin.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "scripts/cast_phase2_round5_static_audit.py",
+          "sha256": "3b5af95088c27dec45481652124f5f123931c84e99d8ceba3fef910d3b521e94"
+        },
+        {
+          "file": "scripts/cast_phase2_lexical_check.py",
+          "sha256": "6446c4775cd8d1859e4400c1b5b51fee7e43962444c5fc07e4f240d2b2bffeb0"
+        },
+        {
+          "file": "scripts/cast_phase2_round5_static_gate.sh",
+          "sha256": "4f76f1f5e91f502db941659fff9c5b389a44613a18a244b510a996ccbe6d5fa8"
+        }
+      ]
+    },
+    "G16": {
+      "status": "PASS",
+      "scope": "Independent adversarial audit",
+      "rationale": "Native author reviewed Dart/player; Dart author reviewed native/player/preferences. Reviewers returned concrete failures, repairs were iterated, and final frozen hashes have no confirmed open P0/P1.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "reports/cast_phase2_round5/DART_INDEPENDENT_AUDIT.MD",
+          "sha256": "f661820842b95a4fb2ba346aec44b9a5c438969b56ceca106611869cf84725d5"
+        },
+        {
+          "file": "reports/cast_phase2_round5/PLAYER_INDEPENDENT_AUDIT.MD",
+          "sha256": "25883fd6a7ac2cb6b677bd0941583b1cb0247059f3d56e6c1595c7243f76faf9"
+        },
+        {
+          "file": "reports/cast_phase2_round5/DART_NATIVE_CROSS_REVIEW.MD",
+          "sha256": "655495f5466c55e546727426d8796b637c46ec40c1cba897aadc4bab16c25c1f"
+        },
+        {
+          "file": "reports/cast_phase2_round5/DART_PLAYER_PREFERENCES_CROSS_REVIEW.MD",
+          "sha256": "f8a5fa9871c5f9b49ed0a80ce43f3fdb551e6cbec73c1463eacf91e72470515d"
+        }
+      ]
+    },
+    "G17": {
+      "status": "PASS",
+      "scope": "Integrated files and contracts",
+      "rationale": "All edited production/test/pubspec boundaries, Dart\u2194Kotlin field types/client authority, profile persistence and source helper call sites were reread. Tests use production functions with transport/store fakes at boundaries; helper coverage is identified honestly.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "android/app/src/main/kotlin/com/debrify/app/cast/DebrifyCastManager.kt",
+          "sha256": "6260aea7de5029e217a7ff15c08dabd7555a1130bc93c4a64f7fcd32f0cb097e"
+        },
+        {
+          "file": "lib/services/cast_service.dart",
+          "sha256": "76cf98ae59ac7a8691091bd3e3290c234c0f3cd827ca1969f091ef33eaa6ab8a"
+        },
+        {
+          "file": "lib/screens/video_player_screen.dart",
+          "sha256": "f912e80a9b7ae3a234035bba2b9e9775b122f95928237b9243e037cbe8813a54"
+        },
+        {
+          "file": "lib/services/cast_player_authority.dart",
+          "sha256": "254d60bb81b2334873d6bdaba49a6883b45ce34af72807d2460cd4ff15c334e6"
+        },
+        {
+          "file": "lib/screens/video_player/widgets/source_sheet.dart",
+          "sha256": "f1d8886d58cce4a19f0f28121c3ba9e63104f6c25943f2e286e02ff783f12918"
+        },
+        {
+          "file": "lib/services/storage_service.dart",
+          "sha256": "dc6e59a7496c1403f80c8127925e89424e68b536ee0eca885e45ad536a0d99b4"
+        },
+        {
+          "file": "lib/services/profiles/profile_preferences.dart",
+          "sha256": "88bb07926919f3dbf25469ec683c65153c36df044240bf553abaebcdb929bfc9"
+        },
+        {
+          "file": "lib/services/iptv_media_store.dart",
+          "sha256": "4e316f599fd928f514e6bd5eec20fcbad11e0b156822ef77bf5a2f7fe9dc93c4"
+        },
+        {
+          "file": "lib/services/mdblist/mdblist_scrobble_session.dart",
+          "sha256": "042d7ed792e73c7a69705b163d1d782375733194cc5f91234f4f0ad505d5f655"
+        },
+        {
+          "file": "pubspec.yaml",
+          "sha256": "3476f02d3e345b2460069719a69558d90def2bcb8b0caac9d04955ab453d3e53"
+        },
+        {
+          "file": "pubspec.lock",
+          "sha256": "41bf1ebc82d2fbcdc40db921b29a75fa5baf392eb36ab6c0aa48932d1e5a29d2"
+        }
+      ]
+    },
+    "G18": {
+      "status": "PASS",
+      "scope": "Authorized operations",
+      "rationale": "During static recovery only source/Git/read/textual audit operations were used; no Flutter/Dart test/analyze/Gradle/build/Actions/merge. Latest user authorizes final PR integration and Android compile after closure; app test/analyze bans remain.",
+      "reviewer": "root + cross-author independent notes (native reviewer / Dart reviewer)",
+      "references": [
+        {
+          "file": "reports/cast_phase2_round5/FINAL_INTEGRATION_REQUEST.json",
+          "sha256": "2028d473283bbc1f4b4f313e559b943a313ec1266ed60ffc5fc620165589a54e"
+        },
+        {
+          "file": ".github/workflows/build.yml",
+          "sha256": "26c06c27f417d37fe0cc637579471e9201bf35ab9f9a916f58a10c21e28e341f"
+        }
+      ]
+    }
+  },
+  "limits": "Semantic manual source review bound to frozen artifacts; mechanical script does not independently prove semantics. No application tests, compiler or runtime verification."
+}
