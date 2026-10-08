@@ -316,10 +316,68 @@ class LocalCatalogImporter {
     return null;
   }
 
+  /// Refresh a catalog that was originally imported from a URL.
+  /// The existing local ID is preserved so favorites and channel order remain
+  /// attached to the same channel.
+  static Future<String?> refreshUrlCatalog(
+    Map<String, dynamic> catalog,
+  ) async {
+    final sourceUrl = (catalog['sourceUrl'] as String? ?? '').trim();
+    if (sourceUrl.isEmpty) return 'Catalog has no source URL';
+
+    final uri = Uri.tryParse(sourceUrl);
+    if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
+      return 'Invalid source URL';
+    }
+
+    try {
+      final response = await http.get(uri).timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) {
+        return 'HTTP ${response.statusCode}';
+      }
+
+      dynamic raw;
+      try {
+        raw = jsonDecode(response.body);
+      } catch (e) {
+        return 'Invalid JSON: $e';
+      }
+
+      Map<String, dynamic> parsed;
+      if (isTrakt(raw)) {
+        final existingName = (catalog['name'] as String? ?? '').trim();
+        parsed = transformTrakt(raw as List, existingName);
+      } else {
+        final err = validate(response.body);
+        if (err != null) return err;
+        parsed = raw as Map<String, dynamic>;
+      }
+
+      final updated = Map<String, dynamic>.from(catalog)
+        ..['name'] = (parsed['name'] as String? ?? catalog['name'] ?? 'Unknown')
+        ..['type'] = parsed['type'] as String? ?? catalog['type'] ?? 'movie'
+        ..['items'] = parsed['items']
+        ..['sourceUrl'] = sourceUrl
+        ..['refreshedAt'] = DateTime.now().toIso8601String();
+
+      final ok = await StorageService.updateStremioTvLocalCatalog(updated);
+      if (!ok) return 'Catalog not found — it may have been deleted';
+      return null;
+    } on TimeoutException {
+      return 'Request timed out';
+    } catch (e) {
+      return 'Failed: $e';
+    }
+  }
+
   /// Validate and save JSON content as a local catalog.
   /// Pass [catalogName] for Trakt lists (which lack a root name).
   /// Returns error message or null on success.
-  static Future<String?> import(String content, {String? catalogName}) async {
+  static Future<String?> import(
+    String content, {
+    String? catalogName,
+    String? sourceUrl,
+  }) async {
     // Detect and transform Trakt format before validation
     dynamic raw;
     try {
@@ -374,8 +432,20 @@ class LocalCatalogImporter {
     final name = (parsed['name'] as String).trim();
 
     final existing = await StorageService.getStremioTvLocalCatalogs();
-    if (existing.any((c) => c['name'] == name)) {
-      return 'Catalog "$name" already exists';
+    final existingIndex = existing.indexWhere((c) => c['name'] == name);
+    if (existingIndex >= 0) {
+      if (sourceUrl == null || sourceUrl.trim().isEmpty) {
+        return 'Catalog "$name" already exists';
+      }
+      final updated = Map<String, dynamic>.from(existing[existingIndex])
+        ..['name'] = name
+        ..['type'] = parsed['type'] as String? ?? 'movie'
+        ..['items'] = parsed['items']
+        ..['sourceUrl'] = sourceUrl.trim()
+        ..['refreshedAt'] = DateTime.now().toIso8601String();
+      updated.addAll(_portableImportMetadata(parsed));
+      final ok = await StorageService.updateStremioTvLocalCatalog(updated);
+      return ok ? null : 'Catalog could not be updated';
     }
 
     final catalog = <String, dynamic>{
@@ -384,6 +454,8 @@ class LocalCatalogImporter {
       'type': parsed['type'] as String? ?? 'movie',
       'addedAt': DateTime.now().toIso8601String(),
       'items': parsed['items'],
+      if (sourceUrl != null && sourceUrl.trim().isNotEmpty)
+        'sourceUrl': sourceUrl.trim(),
       ..._portableImportMetadata(parsed),
     };
 
@@ -1299,6 +1371,29 @@ class _StremioTvLocalCatalogsDialogState
     }
   }
 
+  Future<void> _refreshUrlCatalog(Map<String, dynamic> catalog) async {
+    final id = catalog['id'] as String? ?? '';
+    final name = catalog['name'] as String? ?? 'Unknown';
+    setState(() => _refreshingCatalogId = id);
+    final err = await LocalCatalogImporter.refreshUrlCatalog(catalog);
+    if (!mounted) return;
+    setState(() => _refreshingCatalogId = null);
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Refresh failed: $err'),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    } else {
+      _changed = true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('"$name" refreshed from URL')),
+      );
+      await _loadCatalogs();
+    }
+  }
+
   Future<void> _deleteLocalCatalog(Map<String, dynamic> catalog) async {
     final name = catalog['name'] as String? ?? 'Unknown';
     final confirmed = await showDialog<bool>(
@@ -1415,6 +1510,8 @@ class _StremioTvLocalCatalogsDialogState
                           : null;
                       final isTrakt = catalog['traktSource'] != null;
                       final isMdblist = catalog['mdblistListId'] != null;
+                      final isRemote =
+                          (catalog['sourceUrl'] as String? ?? '').isNotEmpty;
 
                       return ListTile(
                         dense: true,
@@ -1433,6 +1530,8 @@ class _StremioTvLocalCatalogsDialogState
                               ? ' · Trakt'
                               : isMdblist
                               ? ' · MDBList'
+                              : isRemote
+                              ? ' · URL'
                               : ''}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
@@ -1441,7 +1540,7 @@ class _StremioTvLocalCatalogsDialogState
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (isTrakt || isMdblist)
+                            if (isTrakt || isMdblist || isRemote)
                               _refreshingCatalogId == catalog['id']
                                   ? const Padding(
                                       padding: EdgeInsets.all(12),
@@ -1461,14 +1560,20 @@ class _StremioTvLocalCatalogsDialogState
                                       ),
                                       onPressed: _refreshingCatalogId != null
                                           ? null
-                                          : () => isMdblist
-                                                ? _refreshMdblistCatalog(
-                                                    catalog,
-                                                  )
-                                                : _refreshTraktCatalog(catalog),
+                                          : () {
+                                              if (isMdblist) {
+                                                _refreshMdblistCatalog(catalog);
+                                              } else if (isTrakt) {
+                                                _refreshTraktCatalog(catalog);
+                                              } else {
+                                                _refreshUrlCatalog(catalog);
+                                              }
+                                            },
                                       tooltip: isMdblist
                                           ? 'Refresh from MDBList'
-                                          : 'Refresh from Trakt',
+                                          : isTrakt
+                                          ? 'Refresh from Trakt'
+                                          : 'Refresh from URL',
                                     ),
                             IconButton(
                               focusNode: deleteFocus,
@@ -1636,6 +1741,7 @@ class _ImportUrlDialogState extends State<_ImportUrlDialog> {
       final err = await LocalCatalogImporter.import(
         resp.body,
         catalogName: _nameController.text,
+        sourceUrl: url,
       );
       if (!mounted) return;
 
