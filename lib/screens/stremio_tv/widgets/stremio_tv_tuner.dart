@@ -752,6 +752,7 @@ class _StremioTvTunerState extends State<StremioTvTuner> {
                           channel.coverUrl!,
                           fit: BoxFit.cover,
                           placeholderBuilder: (_) => _listThumbFallback(ident, channel),
+                          errorBuilder: (_, __, ___) => _listThumbFallback(ident, channel),
                         )
                       : poster != null
                       ? CachedNetworkImage(
@@ -2179,6 +2180,7 @@ class _DialCardState extends State<_DialCard> {
                       widget.channel.coverUrl!,
                       fit: BoxFit.cover,
                       placeholderBuilder: (_) => _placeholder(ident),
+                      errorBuilder: (_, __, ___) => _placeholder(ident),
                     )
                   else if (widget.channel.coverUrl != null && poster != null)
                     CachedNetworkImage(
@@ -2443,13 +2445,30 @@ class _DialCardState extends State<_DialCard> {
         ),
       ),
       child: Center(
-        child: Icon(
-          widget.channel.type == 'series'
-              ? Icons.live_tv_rounded
-              : Icons.movie_rounded,
-          color: app.core.tx.withValues(alpha: 0.18),
-          size: 32,
-        ),
+        child: widget.channel.coverUrl != null
+            ? Padding(
+                padding: const EdgeInsets.all(8),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    widget.channel.displayName.toUpperCase(),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color(0xFFF2C665),
+                      fontSize: 23,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              )
+            : Icon(
+                widget.channel.type == 'series'
+                    ? Icons.live_tv_rounded
+                    : Icons.movie_rounded,
+                color: app.core.tx.withValues(alpha: 0.18),
+                size: 32,
+              ),
       ),
     );
   }
