@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/foundation.dart'
     show ValueListenable, defaultTargetPlatform;
 import 'package:flutter/gestures.dart';
@@ -704,7 +705,7 @@ class _StremioTvTunerState extends State<StremioTvTuner> {
     final app = AppThemeScope.of(context);
     final ident = _identFor(channel);
     final np = widget.hideNowPlaying ? null : _nowPlaying(channel);
-    final poster = np?.item.poster;
+    final poster = channel.coverUrl ?? np?.item.poster;
     final active = channel.id == _activeId.value;
     return Material(
       color: active ? ident.withValues(alpha: 0.16) : Colors.transparent,
@@ -746,7 +747,14 @@ class _StremioTvTunerState extends State<StremioTvTuner> {
                 child: SizedBox(
                   width: 40,
                   height: 60,
-                  child: poster != null
+                  child: channel.coverUrl?.toLowerCase().endsWith('.svg') == true
+                      ? SvgPicture.network(
+                          channel.coverUrl!,
+                          fit: BoxFit.cover,
+                          placeholderBuilder: (_) => _listThumbFallback(ident, channel),
+                          errorBuilder: (_, __, ___) => _listThumbFallback(ident, channel),
+                        )
+                      : poster != null
                       ? CachedNetworkImage(
                           imageUrl: poster,
                           fit: BoxFit.cover,
@@ -2099,7 +2107,7 @@ class _DialCardState extends State<_DialCard> {
   Widget build(BuildContext context) {
     final app = AppThemeScope.of(context);
     final item = widget.nowPlaying?.item;
-    final poster = item?.poster ?? item?.background;
+    final poster = widget.channel.coverUrl ?? item?.poster ?? item?.background;
     final ident = widget.ident;
     // DPAD focus, desktop hover, or (touch) sitting centred in the dial all
     // mean "this is the channel on the Stage" — one visual for all three.
@@ -2166,8 +2174,23 @@ class _DialCardState extends State<_DialCard> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // Poster artwork
-                  if (poster != null && !widget.hideNowPlaying)
+                  // Dedicated brand art stays visible independent of current movie.
+                  if (widget.channel.coverUrl?.toLowerCase().endsWith('.svg') == true)
+                    SvgPicture.network(
+                      widget.channel.coverUrl!,
+                      fit: BoxFit.cover,
+                      placeholderBuilder: (_) => _placeholder(ident),
+                      errorBuilder: (_, __, ___) => _placeholder(ident),
+                    )
+                  else if (widget.channel.coverUrl != null && poster != null)
+                    CachedNetworkImage(
+                      imageUrl: poster,
+                      fit: BoxFit.cover,
+                      memCacheWidth: 280,
+                      placeholder: (_, __) => _placeholder(ident),
+                      errorWidget: (_, __, ___) => _placeholder(ident),
+                    )
+                  else if (poster != null && !widget.hideNowPlaying)
                     CachedNetworkImage(
                       imageUrl: poster,
                       fit: BoxFit.cover,
@@ -2422,13 +2445,30 @@ class _DialCardState extends State<_DialCard> {
         ),
       ),
       child: Center(
-        child: Icon(
-          widget.channel.type == 'series'
-              ? Icons.live_tv_rounded
-              : Icons.movie_rounded,
-          color: app.core.tx.withValues(alpha: 0.18),
-          size: 32,
-        ),
+        child: widget.channel.coverUrl != null
+            ? Padding(
+                padding: const EdgeInsets.all(8),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    widget.channel.displayName.toUpperCase(),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color(0xFFF2C665),
+                      fontSize: 23,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              )
+            : Icon(
+                widget.channel.type == 'series'
+                    ? Icons.live_tv_rounded
+                    : Icons.movie_rounded,
+                color: app.core.tx.withValues(alpha: 0.18),
+                size: 32,
+              ),
       ),
     );
   }

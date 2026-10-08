@@ -357,6 +357,7 @@ class LocalCatalogImporter {
         ..['name'] = (parsed['name'] as String? ?? catalog['name'] ?? 'Unknown')
         ..['type'] = parsed['type'] as String? ?? catalog['type'] ?? 'movie'
         ..['items'] = parsed['items']
+        ..['cover'] = parsed['cover'] ?? catalog['cover']
         ..['sourceUrl'] = sourceUrl
         ..['refreshedAt'] = DateTime.now().toIso8601String();
 
@@ -441,6 +442,7 @@ class LocalCatalogImporter {
         ..['name'] = name
         ..['type'] = parsed['type'] as String? ?? 'movie'
         ..['items'] = parsed['items']
+        ..['cover'] = parsed['cover'] ?? existing[existingIndex]['cover']
         ..['sourceUrl'] = sourceUrl.trim()
         ..['refreshedAt'] = DateTime.now().toIso8601String();
       updated.addAll(_portableImportMetadata(parsed));
@@ -454,6 +456,9 @@ class LocalCatalogImporter {
       'type': parsed['type'] as String? ?? 'movie',
       'addedAt': DateTime.now().toIso8601String(),
       'items': parsed['items'],
+      if (parsed['cover'] is String &&
+          (parsed['cover'] as String).trim().isNotEmpty)
+        'cover': (parsed['cover'] as String).trim(),
       if (sourceUrl != null && sourceUrl.trim().isNotEmpty)
         'sourceUrl': sourceUrl.trim(),
       ..._portableImportMetadata(parsed),

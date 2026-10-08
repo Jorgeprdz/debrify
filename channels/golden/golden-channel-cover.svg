@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1350" viewBox="0 0 900 1350" role="img" aria-label="Golden Channel: cine dorado sobre fondo negro">
+<defs>
+  <radialGradient id="bg" cx="50%" cy="35%" r="85%"><stop stop-color="#35230a"/><stop offset=".48" stop-color="#0b0806"/><stop offset="1" stop-color="#010101"/></radialGradient>
+  <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#7e460d"/><stop offset=".19" stop-color="#f6d783"/><stop offset=".43" stop-color="#fff2b9"/><stop offset=".58" stop-color="#c88b2e"/><stop offset=".82" stop-color="#f9d77e"/><stop offset="1" stop-color="#6e3a08"/></linearGradient>
+  <linearGradient id="glow" x1="0" x2="1"><stop stop-color="#150c03" stop-opacity="0"/><stop offset=".48" stop-color="#e9b259" stop-opacity=".6"/><stop offset="1" stop-color="#150c03" stop-opacity="0"/></linearGradient>
+  <pattern id="perforations" width="90" height="46" patternUnits="userSpaceOnUse"><rect x="18" y="8" width="32" height="26" rx="5" fill="#b78643" opacity=".85"/></pattern>
+  <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur in="SourceAlpha" stdDeviation="6"/><feOffset dy="6"/><feComponentTransfer><feFuncA type="linear" slope=".65"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="900" height="1350" fill="url(#bg)"/>
+<path d="M-80 980 Q460 730 980 990" fill="none" stroke="#bf8439" stroke-width="6" opacity=".37"/>
+<path d="M-80 1020 Q460 770 980 1030" fill="none" stroke="#e5b35c" stroke-width="82" opacity=".13"/>
+<g transform="translate(55,995) rotate(-8 400 150)" opacity=".72">
+  <rect x="-55" y="0" width="1020" height="210" rx="24" fill="#6f461d"/>
+  <rect x="-55" y="0" width="1020" height="42" fill="url(#perforations)"/>
+  <rect x="-55" y="168" width="1020" height="42" fill="url(#perforations)"/>
+  <rect x="-28" y="48" width="966" height="114" fill="#090806"/>
+  <path d="M80 48V162M280 48V162M480 48V162M680 48V162M880 48V162" stroke="#9a6b31" stroke-width="9"/>
+</g>
+<ellipse cx="455" cy="425" rx="287" ry="287" fill="none" stroke="url(#metal)" stroke-width="12" opacity=".42"/>
+<ellipse cx="455" cy="425" rx="250" ry="250" fill="none" stroke="#c78d38" stroke-width="2" opacity=".54"/>
+<text x="450" y="588" text-anchor="middle" fill="url(#metal)" stroke="#d99f42" stroke-width="2" font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="465" filter="url(#shadow)">G</text>
+<path d="M100 663 H800" stroke="url(#glow)" stroke-width="7"/>
+<text x="450" y="790" text-anchor="middle" fill="url(#metal)" font-family="Arial, Helvetica, sans-serif" font-size="129" font-weight="900" letter-spacing="3" filter="url(#shadow)" textLength="800" lengthAdjust="spacingAndGlyphs">GOLDEN</text>
+<text x="450" y="858" text-anchor="middle" fill="#f6dba5" font-family="Arial, Helvetica, sans-serif" font-size="40" letter-spacing="20" textLength="520" lengthAdjust="spacing">CHANNEL</text>
+<path d="M100 908 H800" stroke="url(#glow)" stroke-width="3"/>
+<text x="450" y="1260" text-anchor="middle" fill="#d8bb7f" font-family="Arial, Helvetica, sans-serif" font-size="23" letter-spacing="6">EL CINE NOS UNE</text>
+</svg>
